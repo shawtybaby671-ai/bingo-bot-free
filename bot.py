@@ -11,8 +11,13 @@ import time
 app = Flask(__name__)
 
 # ENV VARS (Set in Render)
-BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_BOT_TOKEN')
-ADMIN_ID = int(os.environ.get('ADMIN_ID', '123456789'))
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
+if not BOT_TOKEN and os.path.exists('/etc/secrets/bot-token'):
+    with open('/etc/secrets/bot-token', 'r', encoding='utf-8') as f:
+        BOT_TOKEN = f.read().strip()
+BOT_TOKEN = BOT_TOKEN or 'YOUR_BOT_TOKEN'
+
+ADMIN_ID = int(os.environ.get('ADMIN_ID', '1397131889'))
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # Game State
