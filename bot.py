@@ -82,7 +82,7 @@ def status(message):
     bot.reply_to(message, status_text, parse_mode='Markdown')
 
 def game_loop(chat_id):
-    global game_active, called_numbers
+    global game_active, called_numbers, jackpot
     while game_active and len(called_numbers) < 75:
         num = random.randint(1, 75)
         if num not in called_numbers:
@@ -95,7 +95,6 @@ def game_loop(chat_id):
             # Check winners (simple)
             if len(called_numbers) % 10 == 0:
                 bot.send_message(chat_id, f"🔥 *HOT NUMBERS!*\nJackpot now ${jackpot + 5}")
-                global jackpot
                 jackpot += 5
             
             time.sleep(3)
