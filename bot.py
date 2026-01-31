@@ -120,5 +120,9 @@ def home():
     return "🎰 Bingo Bot Live!"
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    use_webhook = os.environ.get('USE_WEBHOOK', '0') == '1'
+    if use_webhook:
+        port = int(os.environ.get('PORT', 5000))
+        app.run(host='0.0.0.0', port=port)
+    else:
+        bot.infinity_polling()
