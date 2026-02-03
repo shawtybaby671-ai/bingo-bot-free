@@ -1,0 +1,356 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Start Bot",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "bot.py"
+            ],
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "options": {
+                "env": {
+                    "USE_WEBHOOK": "0"
+                }
+            }
+        },
+        {
+            "label": "Run All Tests",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "-m",
+                "unittest",
+                "discover",
+                "-v",
+                "-s",
+                ".",
+                "-p",
+                "test*.py"
+            ],
+            "problemMatcher": [],
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Run Test: Bingo",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "test_bingo.py"
+            ],
+            "problemMatcher": [],
+            "group": "test",
+            "presentation": {
+                "reveal": "always"
+            }
+        },
+        {
+            "label": "Run Test: Inline Menu",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "test_inline_menu.py"
+            ],
+            "problemMatcher": [],
+            "group": "test",
+            "presentation": {
+                "reveal": "always"
+            }
+        },
+        {
+            "label": "Run Test: Player Data",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "test_player_data.py"
+            ],
+            "problemMatcher": [],
+            "group": "test",
+            "presentation": {
+                "reveal": "always"
+            }
+        },
+        {
+            "label": "Install Dependencies",
+            "type": "shell",
+            "command": "pip",
+            "args": [
+                "install",
+                "-r",
+                "requirements.txt"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always"
+            }
+        },
+        {
+            "label": "Create Virtual Environment",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "-m",
+                "venv",
+                "venv"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always"
+            }
+        },
+        {
+            "label": "Setup Environment",
+            "type": "shell",
+            "command": "cp",
+            "args": [
+                ".env.example",
+                ".env"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always"
+            },
+            "linux": {
+                "command": "cp"
+            },
+            "osx": {
+                "command": "cp"
+            },
+            "windows": {
+                "command": "copy",
+                "args": [
+                    ".env.example",
+                    ".env"
+                ]
+            }
+        },
+        {
+            "label": "Clear Database",
+            "type": "shell",
+            "command": "rm",
+            "args": [
+                "-f",
+                "game.db"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always"
+            },
+            "linux": {
+                "command": "rm"
+            },
+            "osx": {
+                "command": "rm"
+            },
+            "windows": {
+                "command": "del",
+                "args": [
+                    "game.db"
+                ]
+            }
+        },
+        {
+            "label": "Check Python Syntax",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "-m",
+                "py_compile",
+                "bot.py"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always"
+            }
+        },
+        {
+            "label": "Full Setup (First Time)",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "Create Virtual Environment",
+                "Install Dependencies",
+                "Setup Environment"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always"
+            }
+        },
+        {
+            "label": "Build Docker Image",
+            "type": "shell",
+            "command": "docker",
+            "args": [
+                "build",
+                "-t",
+                "bingo-bot",
+                "."
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Run Docker Container",
+            "type": "shell",
+            "command": "docker",
+            "args": [
+                "run",
+                "-d",
+                "--name",
+                "bingo-bot",
+                "-e",
+                "BOT_TOKEN=${input:botToken}",
+                "-e",
+                "ADMIN_ID=${input:adminId}",
+                "-v",
+                "${workspaceFolder}/player_data:/app/player_data",
+                "-v",
+                "${workspaceFolder}/game.db:/app/game.db",
+                "bingo-bot"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Docker: Build and Run",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "Build Docker Image",
+                "Run Docker Container"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always"
+            }
+        },
+        {
+            "label": "Docker: View Logs",
+            "type": "shell",
+            "command": "docker",
+            "args": [
+                "logs",
+                "-f",
+                "bingo-bot"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "Docker: Stop Container",
+            "type": "shell",
+            "command": "docker",
+            "args": [
+                "stop",
+                "bingo-bot"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Deploy: Check Deployment Files",
+            "type": "shell",
+            "command": "echo",
+            "args": [
+                "Checking deployment files..." 
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "windows": {
+                "command": "cmd",
+                "args": [
+                    "/c",
+                    "echo Checking deployment files... && if exist render.yaml (echo ✓ render.yaml found) else (echo ✗ render.yaml missing) && if exist requirements.txt (echo ✓ requirements.txt found) else (echo ✗ requirements.txt missing) && if exist Dockerfile (echo ✓ Dockerfile found) else (echo ✗ Dockerfile missing) && if exist Procfile (echo ✓ Procfile found) else (echo ✗ Procfile missing)"
+                ]
+            },
+            "linux": {
+                "command": "bash",
+                "args": [
+                    "-c",
+                    "echo 'Checking deployment files...' && [ -f render.yaml ] && echo '✓ render.yaml found' || echo '✗ render.yaml missing' && [ -f requirements.txt ] && echo '✓ requirements.txt found' || echo '✗ requirements.txt missing' && [ -f Dockerfile ] && echo '✓ Dockerfile found' || echo '✗ Dockerfile missing' && [ -f Procfile ] && echo '✓ Procfile found' || echo '✗ Procfile missing'"
+                ]
+            },
+            "osx": {
+                "command": "bash",
+                "args": [
+                    "-c",
+                    "echo 'Checking deployment files...' && [ -f render.yaml ] && echo '✓ render.yaml found' || echo '✗ render.yaml missing' && [ -f requirements.txt ] && echo '✓ requirements.txt found' || echo '✗ requirements.txt missing' && [ -f Dockerfile ] && echo '✓ Dockerfile found' || echo '✗ Dockerfile missing' && [ -f Procfile ] && echo '✓ Procfile found' || echo '✗ Procfile missing'"
+                ]
+            }
+        },
+        {
+            "label": "Deploy: Validate Requirements",
+            "type": "shell",
+            "command": "pip",
+            "args": [
+                "install",
+                "--dry-run",
+                "-r",
+                "requirements.txt"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Deploy: Run Pre-Deployment Tests",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "Check Python Syntax",
+                "Run All Tests",
+                "Deploy: Check Deployment Files",
+                "Deploy: Validate Requirements"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always"
+            }
+        }
+    ],
+    "inputs": [
+        {
+            "id": "botToken",
+            "type": "promptString",
+            "description": "Enter your Telegram bot token",
+            "default": ""
+        },
+        {
+            "id": "adminId",
+            "type": "promptString",
+            "description": "Enter your Telegram admin ID",
+            "default": ""
+        }
+    ]
+}

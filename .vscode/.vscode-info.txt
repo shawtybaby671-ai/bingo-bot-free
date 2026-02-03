@@ -1,0 +1,12 @@
+VS Code Configuration Files
+
+These JSON files contain comments, which is supported by VS Code's JSONC (JSON with Comments) format.
+Standard JSON parsers may report them as invalid, but VS Code handles them correctly.
+
+Files:
+- settings.json: Editor and Python configuration
+- launch.json: Debug configurations
+- tasks.json: Automated tasks
+- extensions.json: Recommended extensions
+
+All files are valid JSONC and will work correctly in Visual Studio Code.

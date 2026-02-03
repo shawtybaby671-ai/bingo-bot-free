@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+game.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+
+# Player data
+player_data/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Documentation (not needed in container)
+*.md
+!README.md
+
+# Scripts
+start.sh
+start.bat
