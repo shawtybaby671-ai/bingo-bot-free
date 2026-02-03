@@ -20,24 +20,61 @@ BOT_TOKEN = BOT_TOKEN or 'YOUR_BOT_TOKEN'
 ADMIN_ID = int(os.environ.get('ADMIN_ID', '1397131889'))
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Game State
-game_active = False
-called_numbers = []
-players = {}  # {user_id: {'card': card, 'marked': set(), 'card_type': 'classic'}}
-jackpot = 0
-current_game_id = 0
-current_game_type = "classic"  # "classic" or "dual_action"
-current_pattern = "single_line"  # Pattern for the current game
+# Game State - per chat/group
+# Structure: {chat_id: {'active': bool, 'called_numbers': [], 'players': {}, 'jackpot': int, 'game_id': int, 'game_type': str, 'pattern': str}}
+games = {}
 
 # Database
 def init_db():
     conn = sqlite3.connect('game.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS games 
-                 (id INTEGER PRIMARY KEY, numbers TEXT, winner TEXT)''')
+                 (id INTEGER PRIMARY KEY, chat_id INTEGER, numbers TEXT, winner TEXT, game_type TEXT, pattern TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS approved_groups
+                 (chat_id INTEGER PRIMARY KEY, chat_title TEXT, approved_by INTEGER, approved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     conn.commit()
     conn.close()
 init_db()
+
+def is_group_approved(chat_id):
+    """Check if a group is approved to run games."""
+    conn = sqlite3.connect('game.db')
+    c = conn.cursor()
+    c.execute("SELECT chat_id FROM approved_groups WHERE chat_id = ?", (chat_id,))
+    result = c.fetchone()
+    conn.close()
+    return result is not None
+
+def approve_group(chat_id, chat_title, admin_id):
+    """Approve a group to run games."""
+    conn = sqlite3.connect('game.db')
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO approved_groups (chat_id, chat_title, approved_by) VALUES (?, ?, ?)",
+              (chat_id, chat_title, admin_id))
+    conn.commit()
+    conn.close()
+
+def unapprove_group(chat_id):
+    """Remove approval for a group."""
+    conn = sqlite3.connect('game.db')
+    c = conn.cursor()
+    c.execute("DELETE FROM approved_groups WHERE chat_id = ?", (chat_id,))
+    conn.commit()
+    conn.close()
+
+def get_game_state(chat_id):
+    """Get or create game state for a chat."""
+    if chat_id not in games:
+        games[chat_id] = {
+            'active': False,
+            'called_numbers': [],
+            'players': {},
+            'jackpot': 0,
+            'game_id': 0,
+            'game_type': 'classic',
+            'pattern': 'single_line'
+        }
+    return games[chat_id]
 
 # BINGO Pattern Definitions
 # Each pattern is a list of (row, col) coordinates (0-4)
@@ -211,221 +248,319 @@ def create_board(called):
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.reply_to(message, "🎰 *Bingo Bot Online!*\n/startgame - New game (Admin)\n/getcard - Get your bingo card\n/mycard - View your card\n/status - Check game", parse_mode='Markdown')
+    help_text = "🎰 *Bingo Bot Online!*\n\n"
+    help_text += "*Player Commands:*\n"
+    help_text += "/getcard - Get your bingo card\n"
+    help_text += "/mycard - View your card\n"
+    help_text += "/status - Check game status\n\n"
+    
+    if message.from_user.id == ADMIN_ID:
+        help_text += "*Admin Commands:*\n"
+        help_text += "/startgame [type] [pattern] - Start game\n"
+        help_text += "/approvegroup - Approve this group\n"
+        help_text += "/unapprovegroup - Remove group approval\n"
+        help_text += "/listgroups - List approved groups\n"
+    
+    bot.reply_to(message, help_text, parse_mode='Markdown')
 
-@bot.message_handler(commands=['startgame'])
-def start_game(message):
-    global game_active, called_numbers, current_game_id, jackpot, players, current_game_type, current_pattern
+@bot.message_handler(commands=['approvegroup'])
+def approve_group_cmd(message):
     if message.from_user.id != ADMIN_ID:
         bot.reply_to(message, "❌ Admin only")
         return
-        
-    game_active = True
-    called_numbers = []
-    players = {}  # Reset players for new game
-    current_game_id += 1
-    jackpot += 10
+    
+    chat_id = message.chat.id
+    chat_title = message.chat.title or "Private Chat"
+    
+    if is_group_approved(chat_id):
+        bot.reply_to(message, f"✅ Group '{chat_title}' is already approved!")
+        return
+    
+    approve_group(chat_id, chat_title, ADMIN_ID)
+    bot.reply_to(message, f"✅ Group '{chat_title}' has been approved for bingo games!")
+
+@bot.message_handler(commands=['unapprovegroup'])
+def unapprove_group_cmd(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ Admin only")
+        return
+    
+    chat_id = message.chat.id
+    chat_title = message.chat.title or "Private Chat"
+    
+    if not is_group_approved(chat_id):
+        bot.reply_to(message, f"❌ Group '{chat_title}' is not approved!")
+        return
+    
+    unapprove_group(chat_id)
+    bot.reply_to(message, f"✅ Group '{chat_title}' approval has been removed!")
+
+@bot.message_handler(commands=['listgroups'])
+def list_groups_cmd(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ Admin only")
+        return
+    
+    conn = sqlite3.connect('game.db')
+    c = conn.cursor()
+    c.execute("SELECT chat_id, chat_title, approved_at FROM approved_groups")
+    groups = c.fetchall()
+    conn.close()
+    
+    if not groups:
+        bot.reply_to(message, "📋 No approved groups yet.")
+        return
+    
+    text = "📋 *Approved Groups:*\n\n"
+    for chat_id, title, approved_at in groups:
+        text += f"• {title} (ID: {chat_id})\n"
+    
+    bot.reply_to(message, text, parse_mode='Markdown')
+
+@bot.message_handler(commands=['startgame'])
+def start_game(message):
+    chat_id = message.chat.id
+    
+    # Check if admin
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ Admin only")
+        return
+    
+    # Check if group is approved
+    if not is_group_approved(chat_id):
+        bot.reply_to(message, "❌ This group is not approved for bingo games!\nUse /approvegroup to approve it.")
+        return
+    
+    game = get_game_state(chat_id)
+    
+    if game['active']:
+        bot.reply_to(message, "⚠️ A game is already active in this group!")
+        return
+    
+    # Reset game state
+    game['active'] = True
+    game['called_numbers'] = []
+    game['players'] = {}
+    game['game_id'] += 1
+    game['jackpot'] += 10
     
     # Parse arguments for game type and pattern (optional)
     args = message.text.split()[1:] if len(message.text.split()) > 1 else []
     if len(args) >= 1 and args[0] in ["classic", "dual_action"]:
-        current_game_type = args[0]
+        game['game_type'] = args[0]
     else:
-        current_game_type = "classic"
+        game['game_type'] = "classic"
     
     if len(args) >= 2 and args[1] in PATTERNS:
-        current_pattern = args[1]
+        game['pattern'] = args[1]
     else:
-        current_pattern = "single_line"
+        game['pattern'] = "single_line"
     
-    game_info = f"🎮 *GAME #{current_game_id} STARTED*\n"
-    game_info += f"🎯 Type: {current_game_type}\n"
-    game_info += f"🏆 Pattern: {current_pattern.replace('_', ' ').title()}\n"
-    game_info += f"💰 Jackpot: ${jackpot}\n\n"
+    game_info = f"🎮 *GAME #{game['game_id']} STARTED*\n"
+    game_info += f"🎯 Type: {game['game_type']}\n"
+    game_info += f"🏆 Pattern: {game['pattern'].replace('_', ' ').title()}\n"
+    game_info += f"💰 Jackpot: ${game['jackpot']}\n\n"
     game_info += "Use /getcard to get your bingo card!"
     
-    bot.send_message(message.chat.id, game_info, parse_mode='Markdown')
-    threading.Thread(target=game_loop, args=(message.chat.id,)).start()
+    bot.send_message(chat_id, game_info, parse_mode='Markdown')
+    threading.Thread(target=game_loop, args=(chat_id,)).start()
 
 @bot.message_handler(commands=['getcard'])
 def get_card(message):
+    chat_id = message.chat.id
     user_id = message.from_user.id
     
-    if not game_active:
+    game = get_game_state(chat_id)
+    
+    if not game['active']:
         bot.reply_to(message, "❌ No active game. Wait for admin to start a game!")
         return
     
-    if user_id in players:
+    if user_id in game['players']:
         bot.reply_to(message, "✅ You already have a card! Use /mycard to view it.")
         return
     
     # Generate card based on current game type
-    if current_game_type == "classic":
+    if game['game_type'] == "classic":
         card = generate_classic_card()
     else:
         card = generate_dual_action_card()
     
-    players[user_id] = {
+    game['players'][user_id] = {
         'card': card,
-        'card_type': current_game_type
+        'card_type': game['game_type']
     }
     
-    marked = get_marked_cells(card, called_numbers, current_game_type)
-    card_text = format_card(card, current_game_type, marked)
+    marked = get_marked_cells(card, game['called_numbers'], game['game_type'])
+    card_text = format_card(card, game['game_type'], marked)
     
-    response = f"🎰 *Your Bingo Card* (Game #{current_game_id})\n"
-    response += f"Type: {current_game_type}\n\n"
+    response = f"🎰 *Your Bingo Card* (Game #{game['game_id']})\n"
+    response += f"Type: {game['game_type']}\n\n"
     response += card_text
-    response += f"\n\nPattern to win: {current_pattern.replace('_', ' ').title()}"
+    response += f"\n\nPattern to win: {game['pattern'].replace('_', ' ').title()}"
     
     bot.reply_to(message, response, parse_mode='Markdown')
 
 @bot.message_handler(commands=['mycard'])
 def my_card(message):
+    chat_id = message.chat.id
     user_id = message.from_user.id
     
-    if user_id not in players:
+    game = get_game_state(chat_id)
+    
+    if user_id not in game['players']:
         bot.reply_to(message, "❌ You don't have a card yet! Use /getcard to get one.")
         return
     
-    player = players[user_id]
+    player = game['players'][user_id]
     card = player['card']
     card_type = player['card_type']
     
-    marked = get_marked_cells(card, called_numbers, card_type)
+    marked = get_marked_cells(card, game['called_numbers'], card_type)
     card_text = format_card(card, card_type, marked)
     
-    response = f"🎰 *Your Bingo Card* (Game #{current_game_id})\n\n"
+    response = f"🎰 *Your Bingo Card* (Game #{game['game_id']})\n\n"
     response += card_text
     response += f"\n\n📊 Marked: {len(marked)}/25"
     
     # Check if player has winning pattern
-    if game_active and check_pattern(card, marked, PATTERNS[current_pattern]):
+    if game['active'] and check_pattern(card, marked, PATTERNS[game['pattern']]):
         response += "\n\n🎉 *YOU HAVE A WINNING PATTERN!* Type 'BINGO' to claim!"
     
     bot.reply_to(message, response, parse_mode='Markdown').start()
 
 @bot.message_handler(commands=['status'])
 def status(message):
-    if not game_active:
+    chat_id = message.chat.id
+    game = get_game_state(chat_id)
+    
+    if not game['active']:
         # Show information even when no game is active
         status_text = "❌ *No Active Game*\n\n"
-        if current_game_id > 0:
-            status_text += f"📊 Last Game: #{current_game_id}\n"
-        status_text += f"💰 Current Jackpot: ${jackpot}\n"
-        status_text += "\nUse /startgame to begin a new game!"
+        if game['game_id'] > 0:
+            status_text += f"📊 Last Game: #{game['game_id']}\n"
+        status_text += f"💰 Current Jackpot: ${game['jackpot']}\n"
+        
+        if is_group_approved(chat_id):
+            status_text += "\n✅ This group is approved for games!"
+        else:
+            status_text += "\n❌ This group is not approved for games."
+        
         bot.reply_to(message, status_text, parse_mode='Markdown')
         return
     
     # Enhanced status for active game
-    last_number = called_numbers[-1] if called_numbers else None
-    progress_percentage = int((len(called_numbers) / 75) * 100)
+    last_number = game['called_numbers'][-1] if game['called_numbers'] else None
+    progress_percentage = int((len(game['called_numbers']) / 75) * 100)
     
     # Create progress bar
     filled = int(progress_percentage / 10)
     progress_bar = "█" * filled + "░" * (10 - filled)
     
-    status_text = f"🎯 *GAME #{current_game_id} ACTIVE*\n\n"
-    status_text += f"🎲 Type: {current_game_type}\n"
-    status_text += f"🏆 Pattern: {current_pattern.replace('_', ' ').title()}\n"
-    status_text += f"📊 Called Numbers: {len(called_numbers)}/75\n"
+    status_text = f"🎯 *GAME #{game['game_id']} ACTIVE*\n\n"
+    status_text += f"🎲 Type: {game['game_type']}\n"
+    status_text += f"🏆 Pattern: {game['pattern'].replace('_', ' ').title()}\n"
+    status_text += f"📊 Called Numbers: {len(game['called_numbers'])}/75\n"
     status_text += f"📈 Progress: {progress_bar} {progress_percentage}%\n\n"
     
     if last_number:
         letter = get_bingo_letter(last_number)
         status_text += f"🎱 Last Called: *{letter}-{last_number}*\n"
     
-    status_text += f"💰 Jackpot: *${jackpot}*\n"
+    status_text += f"💰 Jackpot: *${game['jackpot']}*\n"
     
     # Show player count if available
-    if players:
-        status_text += f"👥 Players: {len(players)}\n"
+    if game['players']:
+        status_text += f"👥 Players: {len(game['players'])}\n"
     
     # Show recent numbers (last 5)
-    if len(called_numbers) >= 5:
-        recent = called_numbers[-5:]
+    if len(game['called_numbers']) >= 5:
+        recent = game['called_numbers'][-5:]
         recent_with_letters = [f"{get_bingo_letter(n)}-{n}" for n in recent]
         status_text += f"\n🔢 Recent: {', '.join(recent_with_letters)}"
     
     bot.reply_to(message, status_text, parse_mode='Markdown')
 
 def game_loop(chat_id):
-    global game_active, called_numbers, jackpot
-    while game_active and len(called_numbers) < 75:
+    game = get_game_state(chat_id)
+    
+    while game['active'] and len(game['called_numbers']) < 75:
         num = random.randint(1, 75)
-        if num not in called_numbers:
-            called_numbers.append(num)
+        if num not in game['called_numbers']:
+            game['called_numbers'].append(num)
             
             # Send board + number with proper BINGO letter
             letter = get_bingo_letter(num)
-            board = create_board(called_numbers)
-            bot.send_photo(chat_id, board, caption=f"🎱 *{letter}-{num}* Called ({len(called_numbers)}/75)")
+            board = create_board(game['called_numbers'])
+            bot.send_photo(chat_id, board, caption=f"🎱 *{letter}-{num}* Called ({len(game['called_numbers'])}/75)")
             
             # Check for winners after each call
             check_for_winners(chat_id)
             
             # Jackpot boost every 10 numbers
-            if len(called_numbers) % 10 == 0:
-                bot.send_message(chat_id, f"🔥 *HOT NUMBERS!*\nJackpot now ${jackpot + 5}")
-                jackpot += 5
+            if len(game['called_numbers']) % 10 == 0:
+                bot.send_message(chat_id, f"🔥 *HOT NUMBERS!*\nJackpot now ${game['jackpot'] + 5}")
+                game['jackpot'] += 5
             
             time.sleep(3)
     
-    game_active = False
+    game['active'] = False
     bot.send_message(chat_id, "🏁 *GAME OVER*\nNew game soon!")
 
 def check_for_winners(chat_id):
     """Check if any player has achieved the winning pattern."""
+    game = get_game_state(chat_id)
     winners = []
-    for user_id, player in players.items():
+    
+    for user_id, player in game['players'].items():
         card = player['card']
         card_type = player['card_type']
-        marked = get_marked_cells(card, called_numbers, card_type)
+        marked = get_marked_cells(card, game['called_numbers'], card_type)
         
-        if check_pattern(card, marked, PATTERNS[current_pattern]):
+        if check_pattern(card, marked, PATTERNS[game['pattern']]):
             winners.append(user_id)
     
     return winners
 
 @bot.message_handler(func=lambda m: True)
 def echo(message):
-    global game_active
-    
     if 'bingo' in message.text.lower():
+        chat_id = message.chat.id
         user_id = message.from_user.id
+        game = get_game_state(chat_id)
         
-        if not game_active:
+        if not game['active']:
             bot.reply_to(message, "❌ No active game!")
             return
         
-        if user_id not in players:
+        if user_id not in game['players']:
             bot.reply_to(message, "❌ You don't have a card! Use /getcard first.")
             return
         
-        player = players[user_id]
+        player = game['players'][user_id]
         card = player['card']
         card_type = player['card_type']
-        marked = get_marked_cells(card, called_numbers, card_type)
+        marked = get_marked_cells(card, game['called_numbers'], card_type)
         
         # Check if player actually has the winning pattern
-        if check_pattern(card, marked, PATTERNS[current_pattern]):
-            game_active = False
+        if check_pattern(card, marked, PATTERNS[game['pattern']]):
+            game['active'] = False
             
             username = message.from_user.first_name or message.from_user.username or "Player"
             win_message = f"🎉 *BINGO!*\n\n"
             win_message += f"Winner: {username}\n"
-            win_message += f"Game #{current_game_id}\n"
-            win_message += f"Pattern: {current_pattern.replace('_', ' ').title()}\n"
-            win_message += f"💰 Prize: ${jackpot}\n\n"
+            win_message += f"Game #{game['game_id']}\n"
+            win_message += f"Pattern: {game['pattern'].replace('_', ' ').title()}\n"
+            win_message += f"💰 Prize: ${game['jackpot']}\n\n"
             win_message += "Congratulations! 🏆"
             
-            bot.send_message(message.chat.id, win_message, parse_mode='Markdown')
+            bot.send_message(chat_id, win_message, parse_mode='Markdown')
             
             # Save to database
             conn = sqlite3.connect('game.db')
             c = conn.cursor()
-            c.execute("INSERT INTO games (id, numbers, winner) VALUES (?, ?, ?)",
-                     (current_game_id, ','.join(map(str, called_numbers)), username))
+            c.execute("INSERT INTO games (chat_id, numbers, winner, game_type, pattern) VALUES (?, ?, ?, ?, ?)",
+                     (chat_id, ','.join(map(str, game['called_numbers'])), username, game['game_type'], game['pattern']))
             conn.commit()
             conn.close()
         else:
