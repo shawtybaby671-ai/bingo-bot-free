@@ -1,0 +1,73 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Bot (Current File)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/bot.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "BOT_TOKEN": "${env:BOT_TOKEN}",
+                "ADMIN_ID": "${env:ADMIN_ID}",
+                "PLAYER_DATA_GROUP_ID": "${env:PLAYER_DATA_GROUP_ID}",
+                "USE_WEBHOOK": "0"
+            },
+            "envFile": "${workspaceFolder}/.env"
+        },
+        {
+            "name": "Python: Bot with .env",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/bot.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "envFile": "${workspaceFolder}/.env"
+        },
+        {
+            "name": "Python: Current Test File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "purpose": ["debug-test"],
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "Python: All Tests",
+            "type": "python",
+            "request": "launch",
+            "module": "unittest",
+            "args": [
+                "discover",
+                "-s",
+                ".",
+                "-p",
+                "test*.py",
+                "-v"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "Python: Bot (Manual Env)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/bot.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "BOT_TOKEN": "YOUR_BOT_TOKEN_HERE",
+                "ADMIN_ID": "YOUR_ADMIN_ID_HERE",
+                "USE_WEBHOOK": "0"
+            }
+        }
+    ]
+}

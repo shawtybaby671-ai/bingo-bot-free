@@ -1,0 +1,196 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Start Bot",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "bot.py"
+            ],
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "options": {
+                "env": {
+                    "USE_WEBHOOK": "0"
+                }
+            }
+        },
+        {
+            "label": "Run All Tests",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "-m",
+                "unittest",
+                "discover",
+                "-v",
+                "-s",
+                ".",
+                "-p",
+                "test*.py"
+            ],
+            "problemMatcher": [],
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Run Test: Bingo",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "test_bingo.py"
+            ],
+            "problemMatcher": [],
+            "group": "test",
+            "presentation": {
+                "reveal": "always"
+            }
+        },
+        {
+            "label": "Run Test: Inline Menu",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "test_inline_menu.py"
+            ],
+            "problemMatcher": [],
+            "group": "test",
+            "presentation": {
+                "reveal": "always"
+            }
+        },
+        {
+            "label": "Run Test: Player Data",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "test_player_data.py"
+            ],
+            "problemMatcher": [],
+            "group": "test",
+            "presentation": {
+                "reveal": "always"
+            }
+        },
+        {
+            "label": "Install Dependencies",
+            "type": "shell",
+            "command": "pip",
+            "args": [
+                "install",
+                "-r",
+                "requirements.txt"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always"
+            }
+        },
+        {
+            "label": "Create Virtual Environment",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "-m",
+                "venv",
+                "venv"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always"
+            }
+        },
+        {
+            "label": "Setup Environment",
+            "type": "shell",
+            "command": "cp",
+            "args": [
+                ".env.example",
+                ".env"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always"
+            },
+            "linux": {
+                "command": "cp"
+            },
+            "osx": {
+                "command": "cp"
+            },
+            "windows": {
+                "command": "copy",
+                "args": [
+                    ".env.example",
+                    ".env"
+                ]
+            }
+        },
+        {
+            "label": "Clear Database",
+            "type": "shell",
+            "command": "rm",
+            "args": [
+                "-f",
+                "game.db"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always"
+            },
+            "linux": {
+                "command": "rm"
+            },
+            "osx": {
+                "command": "rm"
+            },
+            "windows": {
+                "command": "del",
+                "args": [
+                    "game.db"
+                ]
+            }
+        },
+        {
+            "label": "Check Python Syntax",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "-m",
+                "py_compile",
+                "bot.py"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always"
+            }
+        },
+        {
+            "label": "Full Setup (First Time)",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "Create Virtual Environment",
+                "Install Dependencies",
+                "Setup Environment"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always"
+            }
+        }
+    ]
+}

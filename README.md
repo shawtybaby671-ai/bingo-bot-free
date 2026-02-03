@@ -10,6 +10,12 @@ A comprehensive Telegram bingo bot with inline menu system, player profiles, gam
 3. Set environment variables: `BOT_TOKEN` and `ADMIN_ID`
 4. Run: `python bot.py`
 
+**🎨 Using Visual Studio Code?** See [VS_CODE_SETUP.md](VS_CODE_SETUP.md) for:
+- One-click debugging (press F5)
+- Integrated testing
+- Code completion and IntelliSense
+- Automated tasks
+
 **📖 Detailed Instructions:** See [LAUNCH_GUIDE.md](LAUNCH_GUIDE.md) for complete setup instructions including:
 - Local development setup
 - Getting credentials
@@ -251,7 +257,12 @@ The bot automatically logs all player interactions:
 
 ## 📚 Documentation
 
+**Setup & Development:**
 - **[LAUNCH_GUIDE.md](LAUNCH_GUIDE.md)** - Complete setup and deployment guide
+- **[VS_CODE_SETUP.md](VS_CODE_SETUP.md)** - Visual Studio Code configuration and debugging
+- **[LAUNCH_VISUALIZATION.md](LAUNCH_VISUALIZATION.md)** - Visual launch process diagrams
+
+**Features & Architecture:**
 - **[PLAYER_DATA_LOGGING.md](PLAYER_DATA_LOGGING.md)** - Player data logging system documentation
 - **[INLINE_MENU_FLOW.md](INLINE_MENU_FLOW.md)** - User flow and menu navigation
 - **[DATA_FLOW_DIAGRAM.md](DATA_FLOW_DIAGRAM.md)** - System architecture and data flow
