@@ -9,8 +9,13 @@ import sqlite3
 import threading
 import time
 from datetime import datetime
+import json
 
 app = Flask(__name__)
+
+# Player data directory
+PLAYER_DATA_DIR = 'player_data'
+os.makedirs(PLAYER_DATA_DIR, exist_ok=True)
 
 # ENV VARS (Set in Render)
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
@@ -266,6 +271,99 @@ def approve_registration(registration_id):
     conn.commit()
     conn.close()
     return True
+
+# Player Data File Management Functions
+def save_player_dm_data(user_id, registration_id, message_type, message_data):
+    """Save player-admin DM messages as JSON files."""
+    filename = os.path.join(PLAYER_DATA_DIR, f'player_{user_id}_reg_{registration_id}.json')
+    
+    # Load existing data or create new
+    if os.path.exists(filename):
+        with open(filename, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    else:
+        data = {
+            'user_id': user_id,
+            'registration_id': registration_id,
+            'created_at': datetime.now().isoformat(),
+            'messages': []
+        }
+    
+    # Add new message
+    message_entry = {
+        'timestamp': datetime.now().isoformat(),
+        'type': message_type,
+        'data': message_data
+    }
+    data['messages'].append(message_entry)
+    data['last_updated'] = datetime.now().isoformat()
+    
+    # Save to file
+    with open(filename, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    
+    return filename
+
+def get_player_dm_data(user_id, registration_id):
+    """Retrieve player DM data from file."""
+    filename = os.path.join(PLAYER_DATA_DIR, f'player_{user_id}_reg_{registration_id}.json')
+    
+    if not os.path.exists(filename):
+        return None
+    
+    with open(filename, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+def list_player_data_files(user_id=None):
+    """List all player data files, optionally filtered by user_id."""
+    files = []
+    if not os.path.exists(PLAYER_DATA_DIR):
+        return files
+    
+    for filename in os.listdir(PLAYER_DATA_DIR):
+        if filename.endswith('.json'):
+            if user_id is None or filename.startswith(f'player_{user_id}_'):
+                files.append(os.path.join(PLAYER_DATA_DIR, filename))
+    
+    return files
+
+def save_player_profile_snapshot(user_id, username, registration_data):
+    """Save a snapshot of player profile and registration data."""
+    filename = os.path.join(PLAYER_DATA_DIR, f'player_{user_id}_profile.json')
+    
+    # Load existing or create new
+    if os.path.exists(filename):
+        with open(filename, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    else:
+        data = {
+            'user_id': user_id,
+            'username': username,
+            'created_at': datetime.now().isoformat(),
+            'registrations': []
+        }
+    
+    # Add registration to history
+    registration_entry = {
+        'timestamp': datetime.now().isoformat(),
+        'registration_id': registration_data.get('registration_id'),
+        'game_id': registration_data.get('game_id'),
+        'cards_requested': registration_data.get('cards_requested'),
+        'points_paid': registration_data.get('points_paid'),
+        'status': registration_data.get('status'),
+        'game_date': registration_data.get('game_date'),
+        'game_time': registration_data.get('game_time'),
+        'game_type': registration_data.get('game_type'),
+        'pattern': registration_data.get('pattern')
+    }
+    data['registrations'].append(registration_entry)
+    data['last_updated'] = datetime.now().isoformat()
+    
+    # Save to file
+    with open(filename, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    
+    return filename
 
 # BINGO Pattern Definitions
 # Each pattern is a list of (row, col) coordinates (0-4)
