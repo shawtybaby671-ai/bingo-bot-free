@@ -23,9 +23,11 @@ bot = telebot.TeleBot(BOT_TOKEN)
 # Game State
 game_active = False
 called_numbers = []
-players = {}
+players = {}  # {user_id: {'card': card, 'marked': set(), 'card_type': 'classic'}}
 jackpot = 0
 current_game_id = 0
+current_game_type = "classic"  # "classic" or "dual_action"
+current_pattern = "single_line"  # Pattern for the current game
 
 # Database
 def init_db():
@@ -36,6 +38,159 @@ def init_db():
     conn.commit()
     conn.close()
 init_db()
+
+# BINGO Pattern Definitions
+# Each pattern is a list of (row, col) coordinates (0-4)
+PATTERNS = {
+    # Lines
+    "single_line": [
+        # Horizontal lines
+        [(0, 0), (0, 1), (0, 2), (0, 3), (0, 4)],
+        [(1, 0), (1, 1), (1, 2), (1, 3), (1, 4)],
+        [(2, 0), (2, 1), (2, 2), (2, 3), (2, 4)],
+        [(3, 0), (3, 1), (3, 2), (3, 3), (3, 4)],
+        [(4, 0), (4, 1), (4, 2), (4, 3), (4, 4)],
+        # Vertical lines
+        [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0)],
+        [(0, 1), (1, 1), (2, 1), (3, 1), (4, 1)],
+        [(0, 2), (1, 2), (2, 2), (3, 2), (4, 2)],
+        [(0, 3), (1, 3), (2, 3), (3, 3), (4, 3)],
+        [(0, 4), (1, 4), (2, 4), (3, 4), (4, 4)],
+        # Diagonals
+        [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)],
+        [(0, 4), (1, 3), (2, 2), (3, 1), (4, 0)],
+    ],
+    "four_corners": [
+        [(0, 0), (0, 4), (4, 0), (4, 4)],
+    ],
+    "blackout": [
+        [(r, c) for r in range(5) for c in range(5)],
+    ],
+    "letter_X": [
+        [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (0, 4), (1, 3), (3, 1), (4, 0)],
+    ],
+    "postage_stamp": [
+        # Top-left corner
+        [(0, 0), (0, 1), (1, 0), (1, 1)],
+        # Top-right corner
+        [(0, 3), (0, 4), (1, 3), (1, 4)],
+        # Bottom-left corner
+        [(3, 0), (3, 1), (4, 0), (4, 1)],
+        # Bottom-right corner
+        [(3, 3), (3, 4), (4, 3), (4, 4)],
+    ],
+}
+
+# Column ranges for BINGO
+COLUMN_RANGES = {
+    0: (1, 15),    # B
+    1: (16, 30),   # I
+    2: (31, 45),   # N
+    3: (46, 60),   # G
+    4: (61, 75),   # O
+}
+
+def generate_classic_card():
+    """Generate a classic 5x5 bingo card with single numbers per cell."""
+    card = []
+    for col in range(5):
+        min_num, max_num = COLUMN_RANGES[col]
+        # Get 5 unique random numbers from the column's range
+        numbers = random.sample(range(min_num, max_num + 1), 5)
+        card.append(numbers)
+    
+    # Transpose to get rows instead of columns
+    card = [[card[col][row] for col in range(5)] for row in range(5)]
+    # Set center as free space (None)
+    card[2][2] = None
+    return card
+
+def generate_dual_action_card():
+    """Generate a dual action 5x5 bingo card with two numbers per cell."""
+    card = []
+    for col in range(5):
+        min_num, max_num = COLUMN_RANGES[col]
+        # Get 10 unique random numbers for this column (2 per cell)
+        numbers = random.sample(range(min_num, max_num + 1), 10)
+        # Create pairs
+        column_cells = [(numbers[i], numbers[i+1]) for i in range(0, 10, 2)]
+        card.append(column_cells)
+    
+    # Transpose to get rows instead of columns
+    card = [[card[col][row] for col in range(5)] for row in range(5)]
+    # Set center as free space (None)
+    card[2][2] = None
+    return card
+
+def is_cell_marked(cell, called_numbers, card_type):
+    """Check if a cell is marked based on card type."""
+    if cell is None:  # Free space
+        return True
+    
+    if card_type == "classic":
+        return cell in called_numbers
+    elif card_type == "dual_action":
+        return cell[0] in called_numbers or cell[1] in called_numbers
+    
+    return False
+
+def check_pattern(card, marked_cells, pattern_list):
+    """Check if any pattern in the list is complete."""
+    for pattern in pattern_list:
+        if all((r, c) in marked_cells for r, c in pattern):
+            return True
+    return False
+
+def get_marked_cells(card, called_numbers, card_type):
+    """Get set of marked cell coordinates."""
+    marked = set()
+    for r in range(5):
+        for c in range(5):
+            if is_cell_marked(card[r][c], called_numbers, card_type):
+                marked.add((r, c))
+    return marked
+
+def format_card(card, card_type, marked_cells=None):
+    """Format a bingo card as text."""
+    if marked_cells is None:
+        marked_cells = set()
+    
+    text = "```\n  B    I    N    G    O\n"
+    for r in range(5):
+        row_text = ""
+        for c in range(5):
+            cell = card[r][c]
+            if cell is None:
+                cell_str = "FREE"
+            elif card_type == "classic":
+                cell_str = f"{cell:2d}"
+            else:  # dual_action
+                cell_str = f"{cell[0]}/{cell[1]}"
+            
+            # Mark if in marked_cells
+            if (r, c) in marked_cells:
+                cell_str = f"[{cell_str}]"
+            else:
+                cell_str = f" {cell_str} "
+            
+            row_text += cell_str.ljust(5)
+        text += row_text + "\n"
+    text += "```"
+    return text
+
+def get_bingo_letter(num):
+    """Get the BINGO letter for a number."""
+    if 1 <= num <= 15:
+        return 'B'
+    elif 16 <= num <= 30:
+        return 'I'
+    elif 31 <= num <= 45:
+        return 'N'
+    elif 46 <= num <= 60:
+        return 'G'
+    elif 61 <= num <= 75:
+        return 'O'
+    return '?'
 
 # Simple flashboard
 def create_board(called):
@@ -56,22 +211,99 @@ def create_board(called):
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.reply_to(message, "🎰 *Bingo Bot Online!*\n/startgame - New game\n/status - Check game", parse_mode='Markdown')
+    bot.reply_to(message, "🎰 *Bingo Bot Online!*\n/startgame - New game (Admin)\n/getcard - Get your bingo card\n/mycard - View your card\n/status - Check game", parse_mode='Markdown')
 
 @bot.message_handler(commands=['startgame'])
 def start_game(message):
-    global game_active, called_numbers, current_game_id, jackpot
+    global game_active, called_numbers, current_game_id, jackpot, players, current_game_type, current_pattern
     if message.from_user.id != ADMIN_ID:
         bot.reply_to(message, "❌ Admin only")
         return
         
     game_active = True
     called_numbers = []
+    players = {}  # Reset players for new game
     current_game_id += 1
     jackpot += 10
     
-    bot.send_message(message.chat.id, f"🎮 *GAME #{current_game_id} STARTED*\n💰 Jackpot: ${jackpot}", parse_mode='Markdown')
+    # Parse arguments for game type and pattern (optional)
+    args = message.text.split()[1:] if len(message.text.split()) > 1 else []
+    if len(args) >= 1 and args[0] in ["classic", "dual_action"]:
+        current_game_type = args[0]
+    else:
+        current_game_type = "classic"
+    
+    if len(args) >= 2 and args[1] in PATTERNS:
+        current_pattern = args[1]
+    else:
+        current_pattern = "single_line"
+    
+    game_info = f"🎮 *GAME #{current_game_id} STARTED*\n"
+    game_info += f"🎯 Type: {current_game_type}\n"
+    game_info += f"🏆 Pattern: {current_pattern.replace('_', ' ').title()}\n"
+    game_info += f"💰 Jackpot: ${jackpot}\n\n"
+    game_info += "Use /getcard to get your bingo card!"
+    
+    bot.send_message(message.chat.id, game_info, parse_mode='Markdown')
     threading.Thread(target=game_loop, args=(message.chat.id,)).start()
+
+@bot.message_handler(commands=['getcard'])
+def get_card(message):
+    user_id = message.from_user.id
+    
+    if not game_active:
+        bot.reply_to(message, "❌ No active game. Wait for admin to start a game!")
+        return
+    
+    if user_id in players:
+        bot.reply_to(message, "✅ You already have a card! Use /mycard to view it.")
+        return
+    
+    # Generate card based on current game type
+    if current_game_type == "classic":
+        card = generate_classic_card()
+    else:
+        card = generate_dual_action_card()
+    
+    players[user_id] = {
+        'card': card,
+        'card_type': current_game_type
+    }
+    
+    marked = get_marked_cells(card, called_numbers, current_game_type)
+    card_text = format_card(card, current_game_type, marked)
+    
+    response = f"🎰 *Your Bingo Card* (Game #{current_game_id})\n"
+    response += f"Type: {current_game_type}\n\n"
+    response += card_text
+    response += f"\n\nPattern to win: {current_pattern.replace('_', ' ').title()}"
+    
+    bot.reply_to(message, response, parse_mode='Markdown')
+
+@bot.message_handler(commands=['mycard'])
+def my_card(message):
+    user_id = message.from_user.id
+    
+    if user_id not in players:
+        bot.reply_to(message, "❌ You don't have a card yet! Use /getcard to get one.")
+        return
+    
+    player = players[user_id]
+    card = player['card']
+    card_type = player['card_type']
+    
+    marked = get_marked_cells(card, called_numbers, card_type)
+    card_text = format_card(card, card_type, marked)
+    
+    response = f"🎰 *Your Bingo Card* (Game #{current_game_id})\n\n"
+    response += card_text
+    response += f"\n\n📊 Marked: {len(marked)}/25"
+    
+    # Check if player has winning pattern
+    if game_active and check_pattern(card, marked, PATTERNS[current_pattern]):
+        response += "\n\n🎉 *YOU HAVE A WINNING PATTERN!* Type 'BINGO' to claim!"
+    
+    bot.reply_to(message, response, parse_mode='Markdown').start()
 
 @bot.message_handler(commands=['status'])
 def status(message):
@@ -94,11 +326,14 @@ def status(message):
     progress_bar = "█" * filled + "░" * (10 - filled)
     
     status_text = f"🎯 *GAME #{current_game_id} ACTIVE*\n\n"
+    status_text += f"🎲 Type: {current_game_type}\n"
+    status_text += f"🏆 Pattern: {current_pattern.replace('_', ' ').title()}\n"
     status_text += f"📊 Called Numbers: {len(called_numbers)}/75\n"
     status_text += f"📈 Progress: {progress_bar} {progress_percentage}%\n\n"
     
     if last_number:
-        status_text += f"🎱 Last Called: *B{last_number}*\n"
+        letter = get_bingo_letter(last_number)
+        status_text += f"🎱 Last Called: *{letter}-{last_number}*\n"
     
     status_text += f"💰 Jackpot: *${jackpot}*\n"
     
@@ -109,7 +344,8 @@ def status(message):
     # Show recent numbers (last 5)
     if len(called_numbers) >= 5:
         recent = called_numbers[-5:]
-        status_text += f"\n🔢 Recent: {', '.join(map(str, recent))}"
+        recent_with_letters = [f"{get_bingo_letter(n)}-{n}" for n in recent]
+        status_text += f"\n🔢 Recent: {', '.join(recent_with_letters)}"
     
     bot.reply_to(message, status_text, parse_mode='Markdown')
 
@@ -120,11 +356,15 @@ def game_loop(chat_id):
         if num not in called_numbers:
             called_numbers.append(num)
             
-            # Send board + number
+            # Send board + number with proper BINGO letter
+            letter = get_bingo_letter(num)
             board = create_board(called_numbers)
-            bot.send_photo(chat_id, board, caption=f"🎱 *B{num}* Called {len(called_numbers)}/75")
+            bot.send_photo(chat_id, board, caption=f"🎱 *{letter}-{num}* Called ({len(called_numbers)}/75)")
             
-            # Check winners (simple)
+            # Check for winners after each call
+            check_for_winners(chat_id)
+            
+            # Jackpot boost every 10 numbers
             if len(called_numbers) % 10 == 0:
                 bot.send_message(chat_id, f"🔥 *HOT NUMBERS!*\nJackpot now ${jackpot + 5}")
                 jackpot += 5
@@ -134,10 +374,62 @@ def game_loop(chat_id):
     game_active = False
     bot.send_message(chat_id, "🏁 *GAME OVER*\nNew game soon!")
 
+def check_for_winners(chat_id):
+    """Check if any player has achieved the winning pattern."""
+    winners = []
+    for user_id, player in players.items():
+        card = player['card']
+        card_type = player['card_type']
+        marked = get_marked_cells(card, called_numbers, card_type)
+        
+        if check_pattern(card, marked, PATTERNS[current_pattern]):
+            winners.append(user_id)
+    
+    return winners
+
 @bot.message_handler(func=lambda m: True)
 def echo(message):
+    global game_active
+    
     if 'bingo' in message.text.lower():
-        bot.reply_to(message, "🎉 BINGO! You win $" + str(random.randint(10, 100)))
+        user_id = message.from_user.id
+        
+        if not game_active:
+            bot.reply_to(message, "❌ No active game!")
+            return
+        
+        if user_id not in players:
+            bot.reply_to(message, "❌ You don't have a card! Use /getcard first.")
+            return
+        
+        player = players[user_id]
+        card = player['card']
+        card_type = player['card_type']
+        marked = get_marked_cells(card, called_numbers, card_type)
+        
+        # Check if player actually has the winning pattern
+        if check_pattern(card, marked, PATTERNS[current_pattern]):
+            game_active = False
+            
+            username = message.from_user.first_name or message.from_user.username or "Player"
+            win_message = f"🎉 *BINGO!*\n\n"
+            win_message += f"Winner: {username}\n"
+            win_message += f"Game #{current_game_id}\n"
+            win_message += f"Pattern: {current_pattern.replace('_', ' ').title()}\n"
+            win_message += f"💰 Prize: ${jackpot}\n\n"
+            win_message += "Congratulations! 🏆"
+            
+            bot.send_message(message.chat.id, win_message, parse_mode='Markdown')
+            
+            # Save to database
+            conn = sqlite3.connect('game.db')
+            c = conn.cursor()
+            c.execute("INSERT INTO games (id, numbers, winner) VALUES (?, ?, ?)",
+                     (current_game_id, ','.join(map(str, called_numbers)), username))
+            conn.commit()
+            conn.close()
+        else:
+            bot.reply_to(message, "❌ Sorry, you don't have the winning pattern yet!")
 
 # WEBHOOK - Render magic
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
