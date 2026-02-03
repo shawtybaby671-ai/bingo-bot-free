@@ -647,7 +647,7 @@ def my_card(message):
     if game['active'] and check_pattern(card, marked, PATTERNS[game['pattern']]):
         response += "\n\n🎉 *YOU HAVE A WINNING PATTERN!* Type 'BINGO' to claim!"
     
-    bot.reply_to(message, response, parse_mode='Markdown').start()
+    bot.reply_to(message, response, parse_mode='Markdown')
 
 @bot.message_handler(commands=['status'])
 def status(message):
