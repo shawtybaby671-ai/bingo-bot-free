@@ -2,6 +2,21 @@
 
 A comprehensive Telegram bingo bot with inline menu system, player profiles, game scheduling, proper 75-ball bingo rules, and **automated player data logging**.
 
+## 🚀 How to Launch
+
+**Quick Start:**
+1. Get your bot token from [@BotFather](https://t.me/BotFather)
+2. Get your Telegram user ID from [@userinfobot](https://t.me/userinfobot)
+3. Set environment variables: `BOT_TOKEN` and `ADMIN_ID`
+4. Run: `python bot.py`
+
+**📖 Detailed Instructions:** See [LAUNCH_GUIDE.md](LAUNCH_GUIDE.md) for complete setup instructions including:
+- Local development setup
+- Getting credentials
+- Environment variable configuration
+- Deploying to Render (free hosting)
+- Troubleshooting common issues
+
 ## ✨ New Features
 
 ### 📊 Player Data Logging (NEW!)
@@ -233,6 +248,13 @@ The bot automatically logs all player interactions:
   - Get the chat ID (use `/getid` bot or forward message to @userinfobot)
   - Set this environment variable to enable group logging
   - Example: `-1001234567890`
+
+## 📚 Documentation
+
+- **[LAUNCH_GUIDE.md](LAUNCH_GUIDE.md)** - Complete setup and deployment guide
+- **[PLAYER_DATA_LOGGING.md](PLAYER_DATA_LOGGING.md)** - Player data logging system documentation
+- **[INLINE_MENU_FLOW.md](INLINE_MENU_FLOW.md)** - User flow and menu navigation
+- **[DATA_FLOW_DIAGRAM.md](DATA_FLOW_DIAGRAM.md)** - System architecture and data flow
 
 ## Deployed on Render
 FREE FOREVER
