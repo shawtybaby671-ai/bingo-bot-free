@@ -76,9 +76,41 @@ def start_game(message):
 @bot.message_handler(commands=['status'])
 def status(message):
     if not game_active:
-        bot.reply_to(message, "❌ No active game")
+        # Show information even when no game is active
+        status_text = "❌ *No Active Game*\n\n"
+        if current_game_id > 0:
+            status_text += f"📊 Last Game: #{current_game_id}\n"
+        status_text += f"💰 Current Jackpot: ${jackpot}\n"
+        status_text += "\nUse /startgame to begin a new game!"
+        bot.reply_to(message, status_text, parse_mode='Markdown')
         return
-    status_text = f"🎯 *Game Active*\n📊 Called: {len(called_numbers)}/75\n💰 Jackpot: ${jackpot}"
+    
+    # Enhanced status for active game
+    last_number = called_numbers[-1] if called_numbers else None
+    progress_percentage = int((len(called_numbers) / 75) * 100)
+    
+    # Create progress bar
+    filled = int(progress_percentage / 10)
+    progress_bar = "█" * filled + "░" * (10 - filled)
+    
+    status_text = f"🎯 *GAME #{current_game_id} ACTIVE*\n\n"
+    status_text += f"📊 Called Numbers: {len(called_numbers)}/75\n"
+    status_text += f"📈 Progress: {progress_bar} {progress_percentage}%\n\n"
+    
+    if last_number:
+        status_text += f"🎱 Last Called: *B{last_number}*\n"
+    
+    status_text += f"💰 Jackpot: *${jackpot}*\n"
+    
+    # Show player count if available
+    if players:
+        status_text += f"👥 Players: {len(players)}\n"
+    
+    # Show recent numbers (last 5)
+    if len(called_numbers) >= 5:
+        recent = called_numbers[-5:]
+        status_text += f"\n🔢 Recent: {', '.join(map(str, recent))}"
+    
     bot.reply_to(message, status_text, parse_mode='Markdown')
 
 def game_loop(chat_id):
