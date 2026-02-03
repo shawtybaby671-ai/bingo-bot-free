@@ -183,6 +183,17 @@ def get_scheduled_games():
 
 def create_scheduled_game(game_date, game_time, game_type, pattern, max_players=50, entry_cost=10):
     """Create a new scheduled game."""
+    # Validate date format and ensure it's not in the past
+    try:
+        from datetime import datetime
+        game_datetime_str = f"{game_date} {game_time}"
+        game_datetime = datetime.strptime(game_datetime_str, "%Y-%m-%d %H:%M")
+        
+        if game_datetime < datetime.now():
+            return None  # Game is in the past
+    except ValueError:
+        return None  # Invalid date/time format
+    
     conn = sqlite3.connect('game.db')
     c = conn.cursor()
     c.execute("""INSERT INTO scheduled_games (game_date, game_time, game_type, pattern, max_players, entry_cost)
@@ -454,13 +465,13 @@ def start_menu(message):
     
     bot.send_message(message.chat.id, welcome_text, reply_markup=markup, parse_mode='Markdown')
 
-@bot.message_handler(commands=['command'])
+@bot.message_handler(commands=['commands'])
 def show_commands(message):
     """Show commands list."""
     commands_text = "📋 *Available Commands:*\n\n"
     commands_text += "/start - Show main menu\n"
     commands_text += "/menu - Show main menu\n"
-    commands_text += "/command - Show this commands list\n"
+    commands_text += "/commands - Show this commands list\n"
     commands_text += "/profile - View your profile\n"
     commands_text += "/schedule - View game schedule\n"
     commands_text += "/mycard - View your current card\n"
@@ -689,8 +700,8 @@ def handle_join_game(call):
     
     markup = types.InlineKeyboardMarkup(row_width=3)
     for i in range(1, 7):  # 1-6 cards
-        markup.add(types.InlineKeyboardButton(f"{i} Card{'s' if i > 1 else ''}", 
-                                               callback_data=f"cards_{game_id}_{i}"))
+        card_label = f"{i} Card" if i == 1 else f"{i} Cards"
+        markup.add(types.InlineKeyboardButton(card_label, callback_data=f"cards_{game_id}_{i}"))
     markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu_join_game"))
     
     bot.edit_message_text(join_text, call.message.chat.id, call.message.message_id, 
@@ -1043,37 +1054,58 @@ def schedule_game_cmd(message):
         bot.reply_to(message, help_text, parse_mode='Markdown')
         return
     
-    game_date = parts[1]
-    game_time = parts[2]
-    game_type = parts[3]
-    pattern = parts[4]
-    entry_cost = int(parts[5]) if len(parts) > 5 else 10
-    
-    # Validate game type and pattern
-    valid_types = ['classic', 'dual_action']
-    valid_patterns = ['single_line', 'four_corners', 'blackout', 'letter_X', 'postage_stamp']
-    
-    if game_type not in valid_types:
-        bot.reply_to(message, f"❌ Invalid game type. Use: {', '.join(valid_types)}")
-        return
-    
-    if pattern not in valid_patterns:
-        bot.reply_to(message, f"❌ Invalid pattern. Use: {', '.join(valid_patterns)}")
-        return
-    
-    # Create scheduled game
-    game_id = create_scheduled_game(game_date, game_time, game_type, pattern, entry_cost=entry_cost)
-    
-    success_text = f"✅ *Game Scheduled!*\n\n"
-    success_text += f"Game ID: #{game_id}\n"
-    success_text += f"📆 Date: {game_date}\n"
-    success_text += f"🕐 Time: {game_time}\n"
-    success_text += f"🎮 Type: {game_type}\n"
-    success_text += f"🏆 Pattern: {pattern}\n"
-    success_text += f"💎 Entry Cost: {entry_cost} points per card\n\n"
-    success_text += "Players can now join this game from the menu!"
-    
-    bot.reply_to(message, success_text, parse_mode='Markdown')
+    try:
+        game_date = parts[1]
+        game_time = parts[2]
+        game_type = parts[3]
+        pattern = parts[4]
+        entry_cost = 10  # Default
+        
+        # Parse entry cost with validation
+        if len(parts) > 5:
+            try:
+                entry_cost = int(parts[5])
+                if entry_cost < 1 or entry_cost > 1000:
+                    bot.reply_to(message, "❌ Entry cost must be between 1 and 1000 points.")
+                    return
+            except ValueError:
+                bot.reply_to(message, "❌ Entry cost must be a valid number.")
+                return
+        
+        # Validate game type and pattern
+        valid_types = ['classic', 'dual_action']
+        valid_patterns = ['single_line', 'four_corners', 'blackout', 'letter_X', 'postage_stamp']
+        
+        if game_type not in valid_types:
+            bot.reply_to(message, f"❌ Invalid game type. Use: {', '.join(valid_types)}")
+            return
+        
+        if pattern not in valid_patterns:
+            bot.reply_to(message, f"❌ Invalid pattern. Use: {', '.join(valid_patterns)}")
+            return
+        
+        # Create scheduled game (will validate date/time)
+        game_id = create_scheduled_game(game_date, game_time, game_type, pattern, entry_cost=entry_cost)
+        
+        if not game_id:
+            bot.reply_to(message, "❌ Invalid date/time format or game is scheduled in the past.\nUse format: YYYY-MM-DD HH:MM (24-hour)")
+            return
+        
+        success_text = f"✅ *Game Scheduled!*\n\n"
+        success_text += f"Game ID: #{game_id}\n"
+        success_text += f"📆 Date: {game_date}\n"
+        success_text += f"🕐 Time: {game_time}\n"
+        success_text += f"🎮 Type: {game_type}\n"
+        success_text += f"🏆 Pattern: {pattern}\n"
+        success_text += f"💎 Entry Cost: {entry_cost} points per card\n\n"
+        success_text += "Players can now join this game from the menu!"
+        
+        bot.reply_to(message, success_text, parse_mode='Markdown')
+        
+    except IndexError:
+        bot.reply_to(message, "❌ Missing required parameters. Use /schedulegame for help.")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Error scheduling game: {str(e)}")
 
 @bot.message_handler(commands=['profile'])
 def profile_cmd(message):
