@@ -24,6 +24,19 @@ bot = telebot.TeleBot(BOT_TOKEN)
 # Structure: {chat_id: {'active': bool, 'called_numbers': [], 'players': {}, 'jackpot': int, 'game_id': int, 'game_type': str, 'pattern': str}}
 games = {}
 
+# Global Daily Tournament State
+daily_tournament = {
+    'active': False,
+    'called_numbers': [],
+    'players': {},  # {chat_id: {user_id: {'card': card, 'card_type': str}}}
+    'jackpot': 100,  # Higher jackpot for tournaments
+    'game_id': 0,
+    'game_type': 'classic',
+    'pattern': 'single_line',
+    'start_time': None,
+    'participating_groups': set()
+}
+
 # Database
 def init_db():
     conn = sqlite3.connect('game.db')
@@ -32,6 +45,12 @@ def init_db():
                  (id INTEGER PRIMARY KEY, chat_id INTEGER, numbers TEXT, winner TEXT, game_type TEXT, pattern TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS approved_groups
                  (chat_id INTEGER PRIMARY KEY, chat_title TEXT, approved_by INTEGER, approved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS daily_schedule
+                 (id INTEGER PRIMARY KEY, schedule_time TEXT, enabled INTEGER DEFAULT 1, 
+                  game_type TEXT DEFAULT 'classic', pattern TEXT DEFAULT 'blackout')''')
+    c.execute('''CREATE TABLE IF NOT EXISTS tournament_history
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, tournament_id INTEGER, chat_id INTEGER, 
+                  winner_user_id INTEGER, winner_name TEXT, prize INTEGER, completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     conn.commit()
     conn.close()
 init_db()
@@ -75,6 +94,33 @@ def get_game_state(chat_id):
             'pattern': 'single_line'
         }
     return games[chat_id]
+
+def get_all_approved_groups():
+    """Get list of all approved group chat IDs."""
+    conn = sqlite3.connect('game.db')
+    c = conn.cursor()
+    c.execute("SELECT chat_id, chat_title FROM approved_groups")
+    groups = c.fetchall()
+    conn.close()
+    return groups
+
+def schedule_daily_tournament(schedule_time, game_type='classic', pattern='blackout'):
+    """Schedule a daily tournament."""
+    conn = sqlite3.connect('game.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO daily_schedule (schedule_time, game_type, pattern) VALUES (?, ?, ?)",
+              (schedule_time, game_type, pattern))
+    conn.commit()
+    conn.close()
+
+def get_daily_schedule():
+    """Get the daily tournament schedule."""
+    conn = sqlite3.connect('game.db')
+    c = conn.cursor()
+    c.execute("SELECT id, schedule_time, game_type, pattern, enabled FROM daily_schedule WHERE enabled = 1 LIMIT 1")
+    schedule = c.fetchone()
+    conn.close()
+    return schedule
 
 # BINGO Pattern Definitions
 # Each pattern is a list of (row, col) coordinates (0-4)
@@ -250,13 +296,17 @@ def create_board(called):
 def start(message):
     help_text = "🎰 *Bingo Bot Online!*\n\n"
     help_text += "*Player Commands:*\n"
-    help_text += "/getcard - Get your bingo card\n"
+    help_text += "/getcard - Get bingo card (group game)\n"
     help_text += "/mycard - View your card\n"
-    help_text += "/status - Check game status\n\n"
+    help_text += "/status - Check group game status\n"
+    help_text += "/jointournament - Join daily tournament\n"
+    help_text += "/tournamentcard - View tournament card\n"
+    help_text += "/tournamentstatus - Check tournament status\n\n"
     
     if message.from_user.id == ADMIN_ID:
         help_text += "*Admin Commands:*\n"
-        help_text += "/startgame [type] [pattern] - Start game\n"
+        help_text += "/startgame [type] [pattern] - Start group game\n"
+        help_text += "/starttournament [type] [pattern] - Start multi-group tournament\n"
         help_text += "/approvegroup - Approve this group\n"
         help_text += "/unapprovegroup - Remove group approval\n"
         help_text += "/listgroups - List approved groups\n"
@@ -316,6 +366,176 @@ def list_groups_cmd(message):
         text += f"• {title} (ID: {chat_id})\n"
     
     bot.reply_to(message, text, parse_mode='Markdown')
+
+@bot.message_handler(commands=['starttournament'])
+def start_tournament_cmd(message):
+    """Start a multi-group daily tournament."""
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ Admin only")
+        return
+    
+    if daily_tournament['active']:
+        bot.reply_to(message, "⚠️ A tournament is already active!")
+        return
+    
+    # Parse arguments for game type and pattern
+    args = message.text.split()[1:] if len(message.text.split()) > 1 else []
+    if len(args) >= 1 and args[0] in ["classic", "dual_action"]:
+        daily_tournament['game_type'] = args[0]
+    else:
+        daily_tournament['game_type'] = "classic"
+    
+    if len(args) >= 2 and args[1] in PATTERNS:
+        daily_tournament['pattern'] = args[1]
+    else:
+        daily_tournament['pattern'] = "blackout"
+    
+    # Initialize tournament
+    daily_tournament['active'] = True
+    daily_tournament['called_numbers'] = []
+    daily_tournament['players'] = {}
+    daily_tournament['game_id'] += 1
+    daily_tournament['jackpot'] = 100 + (daily_tournament['game_id'] * 10)
+    daily_tournament['start_time'] = time.time()
+    daily_tournament['participating_groups'] = set()
+    
+    # Broadcast to all approved groups
+    groups = get_all_approved_groups()
+    
+    tournament_msg = f"🏆 *DAILY TOURNAMENT #{daily_tournament['game_id']}*\n\n"
+    tournament_msg += f"🎯 Type: {daily_tournament['game_type']}\n"
+    tournament_msg += f"🏅 Pattern: {daily_tournament['pattern'].replace('_', ' ').title()}\n"
+    tournament_msg += f"💰 Jackpot: ${daily_tournament['jackpot']}\n"
+    tournament_msg += f"🌐 Multi-Group Competition\n\n"
+    tournament_msg += "Use /jointournament to participate!"
+    
+    for chat_id, title in groups:
+        try:
+            bot.send_message(chat_id, tournament_msg, parse_mode='Markdown')
+        except Exception as e:
+            print(f"Failed to send to {title}: {e}")
+    
+    # Start the game loop
+    threading.Thread(target=tournament_game_loop).start()
+    
+    bot.reply_to(message, f"✅ Tournament started! Broadcasting to {len(groups)} groups.")
+
+@bot.message_handler(commands=['jointournament'])
+def join_tournament_cmd(message):
+    """Join the daily tournament and get a card."""
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    
+    if not daily_tournament['active']:
+        bot.reply_to(message, "❌ No active tournament. Wait for the daily tournament to start!")
+        return
+    
+    if not is_group_approved(chat_id):
+        bot.reply_to(message, "❌ This group is not approved for tournaments!")
+        return
+    
+    # Initialize chat in players dict if needed
+    if chat_id not in daily_tournament['players']:
+        daily_tournament['players'][chat_id] = {}
+        daily_tournament['participating_groups'].add(chat_id)
+    
+    if user_id in daily_tournament['players'][chat_id]:
+        bot.reply_to(message, "✅ You already joined! Use /tournamentcard to view your card.")
+        return
+    
+    # Generate card
+    if daily_tournament['game_type'] == "classic":
+        card = generate_classic_card()
+    else:
+        card = generate_dual_action_card()
+    
+    daily_tournament['players'][chat_id][user_id] = {
+        'card': card,
+        'card_type': daily_tournament['game_type'],
+        'username': message.from_user.first_name or message.from_user.username or "Player"
+    }
+    
+    marked = get_marked_cells(card, daily_tournament['called_numbers'], daily_tournament['game_type'])
+    card_text = format_card(card, daily_tournament['game_type'], marked)
+    
+    response = f"🏆 *Tournament Card* (Game #{daily_tournament['game_id']})\n"
+    response += f"Type: {daily_tournament['game_type']}\n\n"
+    response += card_text
+    response += f"\n\nPattern: {daily_tournament['pattern'].replace('_', ' ').title()}"
+    
+    bot.reply_to(message, response, parse_mode='Markdown')
+
+@bot.message_handler(commands=['tournamentcard'])
+def tournament_card_cmd(message):
+    """View your tournament card."""
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    
+    if not daily_tournament['active']:
+        bot.reply_to(message, "❌ No active tournament.")
+        return
+    
+    if chat_id not in daily_tournament['players'] or user_id not in daily_tournament['players'][chat_id]:
+        bot.reply_to(message, "❌ You haven't joined the tournament! Use /jointournament.")
+        return
+    
+    player = daily_tournament['players'][chat_id][user_id]
+    card = player['card']
+    card_type = player['card_type']
+    
+    marked = get_marked_cells(card, daily_tournament['called_numbers'], card_type)
+    card_text = format_card(card, card_type, marked)
+    
+    response = f"🏆 *Your Tournament Card* (Game #{daily_tournament['game_id']})\n\n"
+    response += card_text
+    response += f"\n\n📊 Marked: {len(marked)}/25"
+    
+    # Check if player has winning pattern
+    if daily_tournament['active'] and check_pattern(card, marked, PATTERNS[daily_tournament['pattern']]):
+        response += "\n\n🎉 *YOU HAVE A WINNING PATTERN!* Type 'TOURNAMENT BINGO' to claim!"
+    
+    bot.reply_to(message, response, parse_mode='Markdown')
+
+@bot.message_handler(commands=['tournamentstatus'])
+def tournament_status_cmd(message):
+    """Check tournament status."""
+    if not daily_tournament['active']:
+        status_text = "❌ *No Active Tournament*\n\n"
+        if daily_tournament['game_id'] > 0:
+            status_text += f"📊 Last Tournament: #{daily_tournament['game_id']}\n"
+        status_text += f"💰 Next Jackpot: ${daily_tournament['jackpot']}\n"
+        bot.reply_to(message, status_text, parse_mode='Markdown')
+        return
+    
+    # Count total players
+    total_players = sum(len(players) for players in daily_tournament['players'].values())
+    
+    last_number = daily_tournament['called_numbers'][-1] if daily_tournament['called_numbers'] else None
+    progress_percentage = int((len(daily_tournament['called_numbers']) / 75) * 100)
+    filled = int(progress_percentage / 10)
+    progress_bar = "█" * filled + "░" * (10 - filled)
+    
+    status_text = f"🏆 *TOURNAMENT #{daily_tournament['game_id']} ACTIVE*\n\n"
+    status_text += f"🎲 Type: {daily_tournament['game_type']}\n"
+    status_text += f"🏅 Pattern: {daily_tournament['pattern'].replace('_', ' ').title()}\n"
+    status_text += f"📊 Called: {len(daily_tournament['called_numbers'])}/75\n"
+    status_text += f"📈 Progress: {progress_bar} {progress_percentage}%\n\n"
+    
+    if last_number:
+        letter = get_bingo_letter(last_number)
+        status_text += f"🎱 Last Called: *{letter}-{last_number}*\n"
+    
+    status_text += f"💰 Jackpot: *${daily_tournament['jackpot']}*\n"
+    status_text += f"🌐 Groups: {len(daily_tournament['participating_groups'])}\n"
+    status_text += f"👥 Total Players: {total_players}\n"
+    
+    # Show recent numbers
+    if len(daily_tournament['called_numbers']) >= 5:
+        recent = daily_tournament['called_numbers'][-5:]
+        recent_with_letters = [f"{get_bingo_letter(n)}-{n}" for n in recent]
+        status_text += f"\n🔢 Recent: {', '.join(recent_with_letters)}"
+    
+    bot.reply_to(message, status_text, parse_mode='Markdown')
 
 @bot.message_handler(commands=['startgame'])
 def start_game(message):
@@ -522,11 +742,102 @@ def check_for_winners(chat_id):
     
     return winners
 
+def tournament_game_loop():
+    """Game loop for multi-group tournament."""
+    while daily_tournament['active'] and len(daily_tournament['called_numbers']) < 75:
+        num = random.randint(1, 75)
+        if num not in daily_tournament['called_numbers']:
+            daily_tournament['called_numbers'].append(num)
+            
+            # Broadcast to all participating groups
+            letter = get_bingo_letter(num)
+            board = create_board(daily_tournament['called_numbers'])
+            caption = f"🏆 *{letter}-{num}* Called ({len(daily_tournament['called_numbers'])}/75)\nTournament #{daily_tournament['game_id']}"
+            
+            for chat_id in daily_tournament['participating_groups']:
+                try:
+                    bot.send_photo(chat_id, board, caption=caption, parse_mode='Markdown')
+                except Exception as e:
+                    print(f"Failed to send to chat {chat_id}: {e}")
+            
+            # Jackpot boost every 10 numbers
+            if len(daily_tournament['called_numbers']) % 10 == 0:
+                daily_tournament['jackpot'] += 10
+                msg = f"🔥 *TOURNAMENT HEAT!*\nJackpot now ${daily_tournament['jackpot']}"
+                for chat_id in daily_tournament['participating_groups']:
+                    try:
+                        bot.send_message(chat_id, msg, parse_mode='Markdown')
+                    except Exception as e:
+                        print(f"Failed to send to chat {chat_id}: {e}")
+            
+            time.sleep(5)  # Slower pace for tournaments
+    
+    # Tournament ended without winner
+    if daily_tournament['active']:
+        daily_tournament['active'] = False
+        end_msg = "🏁 *TOURNAMENT ENDED*\nNo winner this time. Better luck next tournament!"
+        for chat_id in daily_tournament['participating_groups']:
+            try:
+                bot.send_message(chat_id, end_msg, parse_mode='Markdown')
+            except Exception as e:
+                print(f"Failed to send to chat {chat_id}: {e}")
+
 @bot.message_handler(func=lambda m: True)
 def echo(message):
-    if 'bingo' in message.text.lower():
-        chat_id = message.chat.id
-        user_id = message.from_user.id
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    msg_text = message.text.lower()
+    
+    # Check for tournament BINGO claim
+    if 'tournament' in msg_text and 'bingo' in msg_text:
+        if not daily_tournament['active']:
+            bot.reply_to(message, "❌ No active tournament!")
+            return
+        
+        if chat_id not in daily_tournament['players'] or user_id not in daily_tournament['players'][chat_id]:
+            bot.reply_to(message, "❌ You haven't joined the tournament! Use /jointournament.")
+            return
+        
+        player = daily_tournament['players'][chat_id][user_id]
+        card = player['card']
+        card_type = player['card_type']
+        marked = get_marked_cells(card, daily_tournament['called_numbers'], card_type)
+        
+        # Verify winning pattern
+        if check_pattern(card, marked, PATTERNS[daily_tournament['pattern']]):
+            daily_tournament['active'] = False
+            
+            username = player['username']
+            chat_title = message.chat.title or "Unknown Group"
+            
+            # Broadcast winner to all groups
+            win_message = f"🏆 *TOURNAMENT WINNER!*\n\n"
+            win_message += f"👤 Winner: {username}\n"
+            win_message += f"🏠 From: {chat_title}\n"
+            win_message += f"🎮 Tournament #{daily_tournament['game_id']}\n"
+            win_message += f"🏅 Pattern: {daily_tournament['pattern'].replace('_', ' ').title()}\n"
+            win_message += f"💰 Prize: ${daily_tournament['jackpot']}\n\n"
+            win_message += "Congratulations! 🎉"
+            
+            for group_chat_id in daily_tournament['participating_groups']:
+                try:
+                    bot.send_message(group_chat_id, win_message, parse_mode='Markdown')
+                except Exception as e:
+                    print(f"Failed to send to chat {group_chat_id}: {e}")
+            
+            # Save to database
+            conn = sqlite3.connect('game.db')
+            c = conn.cursor()
+            c.execute("INSERT INTO tournament_history (tournament_id, chat_id, winner_user_id, winner_name, prize) VALUES (?, ?, ?, ?, ?)",
+                     (daily_tournament['game_id'], chat_id, user_id, username, daily_tournament['jackpot']))
+            conn.commit()
+            conn.close()
+        else:
+            bot.reply_to(message, "❌ Sorry, you don't have the winning pattern yet!")
+        return
+    
+    # Check for regular group game BINGO claim
+    if 'bingo' in msg_text:
         game = get_game_state(chat_id)
         
         if not game['active']:
