@@ -1,8 +1,14 @@
 # 🎰 Free Bingo Bot
 
-A comprehensive Telegram bingo bot with inline menu system, player profiles, game scheduling, and proper 75-ball bingo rules.
+A comprehensive Telegram bingo bot with inline menu system, player profiles, game scheduling, proper 75-ball bingo rules, and **automated player data logging**.
 
 ## ✨ New Features
+
+### 📊 Player Data Logging (NEW!)
+- **File-based storage**: All player-admin DM conversations saved as JSON files
+- **Private group logging**: Optional logging to a private Telegram group
+- **Audit trail**: Complete history of registrations, approvals, and interactions
+- **Admin commands**: Manual logging with `/loguser`, `/logreg`, `/logdm`
 
 ### 🎮 Individual Player Bot with Inline Menu
 - **Interactive Menu System**: Use inline buttons to navigate
@@ -100,7 +106,72 @@ A comprehensive Telegram bingo bot with inline menu system, player profiles, gam
 - `/unapprovegroup` - Remove group approval
 - `/listgroups` - List all approved groups
 
-## 💎 Points System
+#### Player Data Logging Commands (NEW!)
+- `/loguser <user_id>` - Log user profile to private group
+- `/logreg <registration_id>` - Log registration details to private group
+- `/logdm <user_id> <registration_id>` - Log DM conversation history to private group
+
+**Note**: Private group logging requires `PLAYER_DATA_GROUP_ID` environment variable to be set.
+
+## 📊 Player Data Management
+
+### Automatic Logging
+The bot automatically logs all player interactions:
+
+**File-based Storage** (`player_data/` directory):
+- `player_{user_id}_reg_{registration_id}.json` - DM conversation history
+- `player_{user_id}_profile.json` - Player profile snapshots
+
+**Private Group Logging** (optional):
+- Set `PLAYER_DATA_GROUP_ID` environment variable to your private group/channel ID
+- Bot will automatically log all registrations, approvals, and interactions
+- Messages include searchable hashtags: `#user_{id}`, `#reg_{id}`, `#approved`, `#rejected`
+- Admin can review/search through group chat history
+
+### Data Structure
+
+**DM Conversation Files**:
+```json
+{
+  "user_id": 12345,
+  "registration_id": 501,
+  "created_at": "2026-02-03T10:00:00",
+  "last_updated": "2026-02-03T10:15:00",
+  "messages": [
+    {
+      "timestamp": "2026-02-03T10:00:00",
+      "type": "registration_request",
+      "data": { "game_id": 1, "cards_requested": 3, ... }
+    },
+    {
+      "timestamp": "2026-02-03T10:15:00",
+      "type": "admin_approval",
+      "data": { "approved": true, "admin_name": "Admin", ... }
+    }
+  ]
+}
+```
+
+**Profile Snapshot Files**:
+```json
+{
+  "user_id": 12345,
+  "username": "PlayerName",
+  "created_at": "2026-02-03T09:00:00",
+  "last_updated": "2026-02-03T10:15:00",
+  "registrations": [
+    {
+      "timestamp": "2026-02-03T10:00:00",
+      "registration_id": 501,
+      "game_id": 1,
+      "status": "confirmed",
+      ...
+    }
+  ]
+}
+```
+
+### Environment Variables
 
 - **Starting Balance**: 100 points for new players
 - **Game Entry**: Each card costs points (set by admin per game)
@@ -148,6 +219,20 @@ A comprehensive Telegram bingo bot with inline menu system, player profiles, gam
 - Links players to scheduled games
 - Tracks cards requested, points paid, approval status
 - Requires admin approval via DM workflow
+
+## 🔧 Environment Variables
+
+### Required
+- `BOT_TOKEN` - Your Telegram bot token from @BotFather
+- `ADMIN_ID` - Telegram user ID of the bot admin
+
+### Optional
+- `PLAYER_DATA_GROUP_ID` - Chat ID of private group for logging player data
+  - Create a private group/channel
+  - Add your bot as administrator
+  - Get the chat ID (use `/getid` bot or forward message to @userinfobot)
+  - Set this environment variable to enable group logging
+  - Example: `-1001234567890`
 
 ## Deployed on Render
 FREE FOREVER

@@ -25,6 +25,15 @@ if not BOT_TOKEN and os.path.exists('/etc/secrets/bot-token'):
 BOT_TOKEN = BOT_TOKEN or 'YOUR_BOT_TOKEN'
 
 ADMIN_ID = int(os.environ.get('ADMIN_ID', '1397131889'))
+
+# Private group for player data logging (optional)
+PLAYER_DATA_GROUP_ID = os.environ.get('PLAYER_DATA_GROUP_ID')
+if PLAYER_DATA_GROUP_ID:
+    try:
+        PLAYER_DATA_GROUP_ID = int(PLAYER_DATA_GROUP_ID)
+    except:
+        PLAYER_DATA_GROUP_ID = None
+
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # Game State - per chat/group
@@ -364,6 +373,79 @@ def save_player_profile_snapshot(user_id, username, registration_data):
         json.dump(data, f, indent=2, ensure_ascii=False)
     
     return filename
+
+# Private Group Logging Functions
+def log_to_private_group(message_text, parse_mode='Markdown'):
+    """Send a log message to the private group."""
+    if not PLAYER_DATA_GROUP_ID:
+        return None
+    
+    try:
+        msg = bot.send_message(PLAYER_DATA_GROUP_ID, message_text, parse_mode=parse_mode)
+        return msg.message_id
+    except Exception as e:
+        print(f"Error logging to private group: {e}")
+        return None
+
+def log_user_profile_to_group(user_id, username):
+    """Log user profile information to private group."""
+    player = get_or_create_player(user_id, username)
+    user_id, username, points, cards_owned = player
+    
+    log_text = f"👤 *Player Profile Update*\n\n"
+    log_text += f"#user\\_{user_id} #profile\n\n"
+    log_text += f"🎭 Username: {username}\n"
+    log_text += f"🆔 User ID: `{user_id}`\n"
+    log_text += f"💎 Points: {points}\n"
+    log_text += f"🎴 Cards Owned: {cards_owned}\n"
+    log_text += f"🕐 Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    
+    return log_to_private_group(log_text)
+
+def log_registration_to_group(registration_id, user_id, username, registration_data):
+    """Log registration request to private group."""
+    log_text = f"📝 *New Registration Request*\n\n"
+    log_text += f"#user\\_{user_id} #reg\\_{registration_id} #pending\n\n"
+    log_text += f"👤 Player: {username}\n"
+    log_text += f"🆔 User ID: `{user_id}`\n"
+    log_text += f"🎮 Game ID: #{registration_data.get('game_id', 'N/A')}\n"
+    log_text += f"📆 Game Date: {registration_data.get('game_date', 'N/A')}\n"
+    log_text += f"🕐 Game Time: {registration_data.get('game_time', 'N/A')}\n"
+    log_text += f"🎴 Cards Requested: {registration_data.get('cards_requested', 0)}\n"
+    log_text += f"💎 Points Required: {registration_data.get('points_paid', 0)}\n"
+    log_text += f"🏆 Type: {registration_data.get('game_type', 'N/A')} - {registration_data.get('pattern', 'N/A')}\n"
+    log_text += f"📊 Status: {registration_data.get('status', 'pending')}\n"
+    log_text += f"🕐 Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    
+    return log_to_private_group(log_text)
+
+def log_approval_to_group(registration_id, user_id, username, approved, admin_name):
+    """Log admin approval/rejection to private group."""
+    if approved:
+        log_text = f"✅ *Registration Approved*\n\n"
+        status_tag = "#approved"
+    else:
+        log_text = f"❌ *Registration Rejected*\n\n"
+        status_tag = "#rejected"
+    
+    log_text += f"#user\\_{user_id} #reg\\_{registration_id} {status_tag}\n\n"
+    log_text += f"👤 Player: {username}\n"
+    log_text += f"👮 Admin: {admin_name}\n"
+    log_text += f"📋 Registration ID: #{registration_id}\n"
+    log_text += f"🕐 Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    
+    return log_to_private_group(log_text)
+
+def log_dm_interaction_to_group(user_id, username, interaction_type, details):
+    """Log DM interactions to private group."""
+    log_text = f"💬 *DM Interaction*\n\n"
+    log_text += f"#user\\_{user_id} #dm #{interaction_type}\n\n"
+    log_text += f"👤 Player: {username}\n"
+    log_text += f"📝 Type: {interaction_type}\n"
+    log_text += f"ℹ️ Details: {details}\n"
+    log_text += f"🕐 Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    
+    return log_to_private_group(log_text)
 
 # BINGO Pattern Definitions
 # Each pattern is a list of (row, col) coordinates (0-4)
@@ -945,6 +1027,27 @@ def handle_dm_registration_start(message):
     try:
         bot.send_message(ADMIN_ID, admin_text, reply_markup=markup, parse_mode='Markdown')
         
+        # Log to private group and save to file
+        registration_data = {
+            'registration_id': registration_id,
+            'game_id': game_id,
+            'cards_requested': cards_requested,
+            'points_paid': points_paid,
+            'game_date': game_date,
+            'game_time': game_time,
+            'game_type': game_type,
+            'pattern': pattern,
+            'status': 'pending'
+        }
+        
+        # Save to file
+        save_player_dm_data(reg_user_id, registration_id, 'registration_request', registration_data)
+        
+        # Log to private group
+        log_registration_to_group(registration_id, reg_user_id, reg_username, registration_data)
+        log_dm_interaction_to_group(reg_user_id, reg_username, 'registration_request', 
+                                     f"Requested {cards_requested} cards for Game #{game_id}")
+        
         # Confirm to player
         confirm_text = f"✅ *Request Sent to Admin!*\n\n"
         confirm_text += f"Registration ID: #{registration_id}\n"
@@ -984,6 +1087,16 @@ def handle_admin_approve(call):
         approved_text = call.message.text + "\n\n✅ *APPROVED*"
         bot.edit_message_text(approved_text, call.message.chat.id, call.message.message_id, 
                              parse_mode='Markdown')
+        
+        # Log approval to file and private group
+        admin_name = call.from_user.first_name or call.from_user.username or "Admin"
+        approval_data = {
+            'approved': True,
+            'admin_id': call.from_user.id,
+            'admin_name': admin_name
+        }
+        save_player_dm_data(user_id, registration_id, 'admin_approval', approval_data)
+        log_approval_to_group(registration_id, user_id, username, True, admin_name)
         
         # Notify player
         notify_text = f"🎉 *Registration Approved!*\n\n"
@@ -1032,6 +1145,16 @@ def handle_admin_reject(call):
     rejected_text = call.message.text + "\n\n❌ *REJECTED*"
     bot.edit_message_text(rejected_text, call.message.chat.id, call.message.message_id, 
                          parse_mode='Markdown')
+    
+    # Log rejection to file and private group
+    admin_name = call.from_user.first_name or call.from_user.username or "Admin"
+    rejection_data = {
+        'approved': False,
+        'admin_id': call.from_user.id,
+        'admin_name': admin_name
+    }
+    save_player_dm_data(user_id, registration_id, 'admin_rejection', rejection_data)
+    log_approval_to_group(registration_id, user_id, username, False, admin_name)
     
     # Notify player
     notify_text = f"❌ *Registration Rejected*\n\n"
@@ -1129,6 +1252,147 @@ def list_groups_cmd(message):
         text += f"• {title} (ID: {chat_id})\n"
     
     bot.reply_to(message, text, parse_mode='Markdown')
+
+# Admin commands for private group logging
+@bot.message_handler(commands=['loguser'])
+def log_user_cmd(message):
+    """Admin command to log user profile to private group."""
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ Admin only")
+        return
+    
+    if not PLAYER_DATA_GROUP_ID:
+        bot.reply_to(message, "❌ Private group logging not configured. Set PLAYER_DATA_GROUP_ID environment variable.")
+        return
+    
+    parts = message.text.split()
+    if len(parts) < 2:
+        bot.reply_to(message, "Usage: /loguser <user_id>")
+        return
+    
+    try:
+        user_id = int(parts[1])
+    except:
+        bot.reply_to(message, "❌ Invalid user ID")
+        return
+    
+    # Get player info
+    conn = sqlite3.connect('game.db')
+    c = conn.cursor()
+    c.execute("SELECT user_id, username, points, cards_owned FROM player_profiles WHERE user_id = ?", (user_id,))
+    player = c.fetchone()
+    conn.close()
+    
+    if not player:
+        bot.reply_to(message, f"❌ Player with ID {user_id} not found")
+        return
+    
+    user_id, username, points, cards_owned = player
+    msg_id = log_user_profile_to_group(user_id, username)
+    
+    if msg_id:
+        bot.reply_to(message, f"✅ Logged user {username} (ID: {user_id}) to private group")
+    else:
+        bot.reply_to(message, "❌ Failed to log to private group")
+
+@bot.message_handler(commands=['logreg'])
+def log_registration_cmd(message):
+    """Admin command to log registration details to private group."""
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ Admin only")
+        return
+    
+    if not PLAYER_DATA_GROUP_ID:
+        bot.reply_to(message, "❌ Private group logging not configured. Set PLAYER_DATA_GROUP_ID environment variable.")
+        return
+    
+    parts = message.text.split()
+    if len(parts) < 2:
+        bot.reply_to(message, "Usage: /logreg <registration_id>")
+        return
+    
+    try:
+        registration_id = int(parts[1])
+    except:
+        bot.reply_to(message, "❌ Invalid registration ID")
+        return
+    
+    # Get registration details
+    registration = get_registration(registration_id)
+    if not registration:
+        bot.reply_to(message, f"❌ Registration #{registration_id} not found")
+        return
+    
+    (reg_id, game_id, user_id, username, cards_requested, points_paid, 
+     status, admin_approved, game_date, game_time, game_type, pattern) = registration
+    
+    registration_data = {
+        'registration_id': registration_id,
+        'game_id': game_id,
+        'cards_requested': cards_requested,
+        'points_paid': points_paid,
+        'game_date': game_date,
+        'game_time': game_time,
+        'game_type': game_type,
+        'pattern': pattern,
+        'status': status,
+        'admin_approved': admin_approved
+    }
+    
+    msg_id = log_registration_to_group(registration_id, user_id, username, registration_data)
+    
+    if msg_id:
+        bot.reply_to(message, f"✅ Logged registration #{registration_id} to private group")
+    else:
+        bot.reply_to(message, "❌ Failed to log to private group")
+
+@bot.message_handler(commands=['logdm'])
+def log_dm_history_cmd(message):
+    """Admin command to log DM history from file to private group."""
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ Admin only")
+        return
+    
+    if not PLAYER_DATA_GROUP_ID:
+        bot.reply_to(message, "❌ Private group logging not configured. Set PLAYER_DATA_GROUP_ID environment variable.")
+        return
+    
+    parts = message.text.split()
+    if len(parts) < 3:
+        bot.reply_to(message, "Usage: /logdm <user_id> <registration_id>")
+        return
+    
+    try:
+        user_id = int(parts[1])
+        registration_id = int(parts[2])
+    except:
+        bot.reply_to(message, "❌ Invalid user_id or registration_id")
+        return
+    
+    # Get DM data from file
+    dm_data = get_player_dm_data(user_id, registration_id)
+    if not dm_data:
+        bot.reply_to(message, f"❌ No DM data found for user {user_id}, registration {registration_id}")
+        return
+    
+    # Log to group
+    log_text = f"📋 *DM History*\n\n"
+    log_text += f"#user\\_{user_id} #reg\\_{registration_id} #dm\\_history\n\n"
+    log_text += f"🆔 User ID: `{user_id}`\n"
+    log_text += f"📋 Registration ID: #{registration_id}\n"
+    log_text += f"📅 Created: {dm_data.get('created_at', 'N/A')}\n"
+    log_text += f"🔄 Last Updated: {dm_data.get('last_updated', 'N/A')}\n"
+    log_text += f"💬 Messages: {len(dm_data.get('messages', []))}\n\n"
+    
+    for msg in dm_data.get('messages', []):
+        log_text += f"• {msg.get('type', 'unknown')}: {msg.get('timestamp', 'N/A')}\n"
+    
+    msg_id = log_to_private_group(log_text)
+    
+    if msg_id:
+        bot.reply_to(message, f"✅ Logged DM history to private group")
+    else:
+        bot.reply_to(message, "❌ Failed to log to private group")
 
 @bot.message_handler(commands=['schedulegame'])
 def schedule_game_cmd(message):
