@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify
 import telebot
+from telebot import types
 import os
 import random
 import io
@@ -7,6 +8,7 @@ from PIL import Image, ImageDraw
 import sqlite3
 import threading
 import time
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -51,6 +53,27 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS tournament_history
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, tournament_id INTEGER, chat_id INTEGER, 
                   winner_user_id INTEGER, winner_name TEXT, prize INTEGER, completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+    
+    # Player profile table
+    c.execute('''CREATE TABLE IF NOT EXISTS player_profiles
+                 (user_id INTEGER PRIMARY KEY, username TEXT, points INTEGER DEFAULT 100, 
+                  cards_owned INTEGER DEFAULT 0, join_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+    
+    # Scheduled games table
+    c.execute('''CREATE TABLE IF NOT EXISTS scheduled_games
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, game_date TEXT, game_time TEXT, 
+                  game_type TEXT, pattern TEXT, max_players INTEGER DEFAULT 50, 
+                  entry_cost INTEGER DEFAULT 10, status TEXT DEFAULT 'scheduled',
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+    
+    # Game registrations table
+    c.execute('''CREATE TABLE IF NOT EXISTS game_registrations
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, game_id INTEGER, user_id INTEGER, 
+                  username TEXT, cards_requested INTEGER, points_paid INTEGER, 
+                  status TEXT DEFAULT 'pending', admin_approved TEXT DEFAULT 'pending',
+                  registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                  FOREIGN KEY(game_id) REFERENCES scheduled_games(id))''')
+    
     conn.commit()
     conn.close()
 init_db()
@@ -121,6 +144,117 @@ def get_daily_schedule():
     schedule = c.fetchone()
     conn.close()
     return schedule
+
+# Player Management Functions
+def get_or_create_player(user_id, username):
+    """Get player profile or create if doesn't exist."""
+    conn = sqlite3.connect('game.db')
+    c = conn.cursor()
+    c.execute("SELECT user_id, username, points, cards_owned FROM player_profiles WHERE user_id = ?", (user_id,))
+    player = c.fetchone()
+    
+    if not player:
+        # Create new player with starting points
+        c.execute("INSERT INTO player_profiles (user_id, username, points) VALUES (?, ?, ?)",
+                 (user_id, username, 100))
+        conn.commit()
+        player = (user_id, username, 100, 0)
+    
+    conn.close()
+    return player
+
+def update_player_points(user_id, points_delta):
+    """Update player points (positive or negative delta)."""
+    conn = sqlite3.connect('game.db')
+    c = conn.cursor()
+    c.execute("UPDATE player_profiles SET points = points + ? WHERE user_id = ?", (points_delta, user_id))
+    conn.commit()
+    conn.close()
+
+def get_scheduled_games():
+    """Get list of scheduled games."""
+    conn = sqlite3.connect('game.db')
+    c = conn.cursor()
+    c.execute("""SELECT id, game_date, game_time, game_type, pattern, max_players, entry_cost, status 
+                 FROM scheduled_games WHERE status = 'scheduled' ORDER BY game_date, game_time""")
+    games = c.fetchall()
+    conn.close()
+    return games
+
+def create_scheduled_game(game_date, game_time, game_type, pattern, max_players=50, entry_cost=10):
+    """Create a new scheduled game."""
+    conn = sqlite3.connect('game.db')
+    c = conn.cursor()
+    c.execute("""INSERT INTO scheduled_games (game_date, game_time, game_type, pattern, max_players, entry_cost)
+                 VALUES (?, ?, ?, ?, ?, ?)""",
+             (game_date, game_time, game_type, pattern, max_players, entry_cost))
+    game_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    return game_id
+
+def register_for_game(game_id, user_id, username, cards_requested):
+    """Register player for a scheduled game."""
+    conn = sqlite3.connect('game.db')
+    c = conn.cursor()
+    
+    # Calculate points required (entry cost per card)
+    c.execute("SELECT entry_cost FROM scheduled_games WHERE id = ?", (game_id,))
+    result = c.fetchone()
+    if not result:
+        conn.close()
+        return None
+    
+    entry_cost = result[0]
+    points_required = entry_cost * cards_requested
+    
+    # Insert registration
+    c.execute("""INSERT INTO game_registrations 
+                 (game_id, user_id, username, cards_requested, points_paid, status, admin_approved)
+                 VALUES (?, ?, ?, ?, ?, 'pending', 'pending')""",
+             (game_id, user_id, username, cards_requested, points_required))
+    registration_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    return registration_id
+
+def get_registration(registration_id):
+    """Get registration details."""
+    conn = sqlite3.connect('game.db')
+    c = conn.cursor()
+    c.execute("""SELECT r.id, r.game_id, r.user_id, r.username, r.cards_requested, r.points_paid, 
+                        r.status, r.admin_approved, g.game_date, g.game_time, g.game_type, g.pattern
+                 FROM game_registrations r
+                 JOIN scheduled_games g ON r.game_id = g.id
+                 WHERE r.id = ?""", (registration_id,))
+    registration = c.fetchone()
+    conn.close()
+    return registration
+
+def approve_registration(registration_id):
+    """Admin approves a registration."""
+    conn = sqlite3.connect('game.db')
+    c = conn.cursor()
+    
+    # Get registration details
+    c.execute("SELECT user_id, points_paid FROM game_registrations WHERE id = ?", (registration_id,))
+    result = c.fetchone()
+    if not result:
+        conn.close()
+        return False
+    
+    user_id, points_paid = result
+    
+    # Update registration status
+    c.execute("UPDATE game_registrations SET admin_approved = 'approved', status = 'confirmed' WHERE id = ?",
+             (registration_id,))
+    
+    # Deduct points from player
+    c.execute("UPDATE player_profiles SET points = points - ? WHERE user_id = ?", (points_paid, user_id))
+    
+    conn.commit()
+    conn.close()
+    return True
 
 # BINGO Pattern Definitions
 # Each pattern is a list of (row, col) coordinates (0-4)
@@ -292,26 +426,546 @@ def create_board(called):
     bio.seek(0)
     return bio
 
-@bot.message_handler(commands=['start'])
-def start(message):
-    help_text = "🎰 *Bingo Bot Online!*\n\n"
-    help_text += "*Player Commands:*\n"
-    help_text += "/getcard - Get bingo card (group game)\n"
-    help_text += "/mycard - View your card\n"
-    help_text += "/status - Check group game status\n"
-    help_text += "/jointournament - Join daily tournament\n"
-    help_text += "/tournamentcard - View tournament card\n"
-    help_text += "/tournamentstatus - Check tournament status\n\n"
+@bot.message_handler(commands=['start', 'menu'])
+def start_menu(message):
+    """Display welcome message and main menu with inline buttons."""
+    user_id = message.from_user.id
+    username = message.from_user.first_name or message.from_user.username or "Player"
+    
+    # Ensure player profile exists
+    get_or_create_player(user_id, username)
+    
+    # Create inline keyboard
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    
+    btn_profile = types.InlineKeyboardButton("👤 Player Profile", callback_data="menu_profile")
+    btn_commands = types.InlineKeyboardButton("📋 Commands", callback_data="menu_commands")
+    btn_rules = types.InlineKeyboardButton("📖 Rules", callback_data="menu_rules")
+    btn_request = types.InlineKeyboardButton("🎮 Request Game Type", callback_data="menu_request_game")
+    btn_schedule = types.InlineKeyboardButton("📅 Game Schedule", callback_data="menu_schedule")
+    btn_join = types.InlineKeyboardButton("🎯 Join a Game", callback_data="menu_join_game")
+    
+    markup.add(btn_profile, btn_commands)
+    markup.add(btn_rules, btn_request)
+    markup.add(btn_schedule, btn_join)
+    
+    welcome_text = f"🎰 *Welcome to Bingo Bot, {username}!*\n\n"
+    welcome_text += "Choose an option from the menu below:"
+    
+    bot.send_message(message.chat.id, welcome_text, reply_markup=markup, parse_mode='Markdown')
+
+@bot.message_handler(commands=['command'])
+def show_commands(message):
+    """Show commands list."""
+    commands_text = "📋 *Available Commands:*\n\n"
+    commands_text += "/start - Show main menu\n"
+    commands_text += "/menu - Show main menu\n"
+    commands_text += "/command - Show this commands list\n"
+    commands_text += "/profile - View your profile\n"
+    commands_text += "/schedule - View game schedule\n"
+    commands_text += "/mycard - View your current card\n"
+    commands_text += "/status - Check group game status\n\n"
     
     if message.from_user.id == ADMIN_ID:
-        help_text += "*Admin Commands:*\n"
-        help_text += "/startgame [type] [pattern] - Start group game\n"
-        help_text += "/starttournament [type] [pattern] - Start multi-group tournament\n"
-        help_text += "/approvegroup - Approve this group\n"
-        help_text += "/unapprovegroup - Remove group approval\n"
-        help_text += "/listgroups - List approved groups\n"
+        commands_text += "*Admin Commands:*\n"
+        commands_text += "/schedulegame - Schedule a new game\n"
+        commands_text += "/approvegroup - Approve this group\n"
+        commands_text += "/listgroups - List approved groups\n"
     
-    bot.reply_to(message, help_text, parse_mode='Markdown')
+    bot.reply_to(message, commands_text, parse_mode='Markdown')
+
+# Callback query handlers for inline buttons
+@bot.callback_query_handler(func=lambda call: call.data.startswith('menu_'))
+def handle_menu_callback(call):
+    """Handle menu button callbacks."""
+    user_id = call.from_user.id
+    username = call.from_user.first_name or call.from_user.username or "Player"
+    
+    if call.data == "menu_profile":
+        show_player_profile(call)
+    elif call.data == "menu_commands":
+        show_commands_menu(call)
+    elif call.data == "menu_rules":
+        show_rules_menu(call)
+    elif call.data == "menu_request_game":
+        show_request_game_menu(call)
+    elif call.data == "menu_schedule":
+        show_schedule_menu(call)
+    elif call.data == "menu_join_game":
+        show_join_game_menu(call)
+    elif call.data == "back_to_main":
+        back_to_main_menu(call)
+
+def show_player_profile(call):
+    """Display player profile."""
+    user_id = call.from_user.id
+    username = call.from_user.first_name or call.from_user.username or "Player"
+    
+    player = get_or_create_player(user_id, username)
+    user_id, username, points, cards_owned = player
+    
+    profile_text = f"👤 *Player Profile*\n\n"
+    profile_text += f"🎭 Name: {username}\n"
+    profile_text += f"💎 Points: {points}\n"
+    profile_text += f"🎴 Cards Owned: {cards_owned}\n"
+    profile_text += f"🆔 ID: {user_id}\n"
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data="back_to_main"))
+    
+    bot.edit_message_text(profile_text, call.message.chat.id, call.message.message_id, 
+                         reply_markup=markup, parse_mode='Markdown')
+    bot.answer_callback_query(call.id)
+
+def show_commands_menu(call):
+    """Display commands list."""
+    commands_text = "📋 *Available Commands:*\n\n"
+    commands_text += "• /start - Show main menu\n"
+    commands_text += "• /menu - Show main menu\n"
+    commands_text += "• /command - Commands list\n"
+    commands_text += "• /profile - Your profile\n"
+    commands_text += "• /schedule - Game schedule\n"
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data="back_to_main"))
+    
+    bot.edit_message_text(commands_text, call.message.chat.id, call.message.message_id, 
+                         reply_markup=markup, parse_mode='Markdown')
+    bot.answer_callback_query(call.id)
+
+def show_rules_menu(call):
+    """Display game rules."""
+    rules_text = "📖 *Bingo Game Rules*\n\n"
+    rules_text += "*How to Play:*\n"
+    rules_text += "1. Join a scheduled game from the Game Schedule menu\n"
+    rules_text += "2. Select number of cards you want (costs points per card)\n"
+    rules_text += "3. Approve your purchase and DM the bot\n"
+    rules_text += "4. Admin will approve your request\n"
+    rules_text += "5. You'll be added to the game and receive your cards\n\n"
+    
+    rules_text += "*Card Types:*\n"
+    rules_text += "• *Classic*: Single number per cell\n"
+    rules_text += "• *Dual Action*: Two numbers per cell\n\n"
+    
+    rules_text += "*Winning Patterns:*\n"
+    rules_text += "• Single Line\n"
+    rules_text += "• Four Corners\n"
+    rules_text += "• Blackout (Full Card)\n"
+    rules_text += "• Letter X\n"
+    rules_text += "• Postage Stamp\n"
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data="back_to_main"))
+    
+    bot.edit_message_text(rules_text, call.message.chat.id, call.message.message_id, 
+                         reply_markup=markup, parse_mode='Markdown')
+    bot.answer_callback_query(call.id)
+
+def show_request_game_menu(call):
+    """Display game type request menu."""
+    request_text = "🎮 *Request Game Type*\n\n"
+    request_text += "Select the type of game you'd like to request:\n"
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn_classic = types.InlineKeyboardButton("Classic", callback_data="request_classic")
+    btn_dual = types.InlineKeyboardButton("Dual Action", callback_data="request_dual")
+    btn_back = types.InlineKeyboardButton("⬅️ Back to Menu", callback_data="back_to_main")
+    
+    markup.add(btn_classic, btn_dual)
+    markup.add(btn_back)
+    
+    bot.edit_message_text(request_text, call.message.chat.id, call.message.message_id, 
+                         reply_markup=markup, parse_mode='Markdown')
+    bot.answer_callback_query(call.id)
+
+def show_schedule_menu(call):
+    """Display scheduled games."""
+    games = get_scheduled_games()
+    
+    if not games:
+        schedule_text = "📅 *Game Schedule*\n\n"
+        schedule_text += "No games scheduled at the moment.\n"
+        schedule_text += "Check back later!"
+    else:
+        schedule_text = "📅 *Upcoming Games*\n\n"
+        for game in games:
+            game_id, game_date, game_time, game_type, pattern, max_players, entry_cost, status = game
+            schedule_text += f"*Game #{game_id}*\n"
+            schedule_text += f"📆 Date: {game_date}\n"
+            schedule_text += f"🕐 Time: {game_time}\n"
+            schedule_text += f"🎮 Type: {game_type}\n"
+            schedule_text += f"🏆 Pattern: {pattern}\n"
+            schedule_text += f"💎 Entry: {entry_cost} points per card\n"
+            schedule_text += f"👥 Max Players: {max_players}\n"
+            schedule_text += "─────────────\n"
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data="back_to_main"))
+    
+    bot.edit_message_text(schedule_text, call.message.chat.id, call.message.message_id, 
+                         reply_markup=markup, parse_mode='Markdown')
+    bot.answer_callback_query(call.id)
+
+def show_join_game_menu(call):
+    """Display games available to join."""
+    games = get_scheduled_games()
+    
+    if not games:
+        join_text = "🎯 *Join a Game*\n\n"
+        join_text += "No games available to join at the moment.\n"
+        join_text += "Check the schedule later!"
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data="back_to_main"))
+    else:
+        join_text = "🎯 *Select a Game to Join*\n\n"
+        join_text += "Click on a game to join:"
+        
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        for game in games[:5]:  # Show max 5 games
+            game_id, game_date, game_time, game_type, pattern, max_players, entry_cost, status = game
+            btn_text = f"Game #{game_id} - {game_date} {game_time}"
+            markup.add(types.InlineKeyboardButton(btn_text, callback_data=f"join_game_{game_id}"))
+        
+        markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data="back_to_main"))
+    
+    bot.edit_message_text(join_text, call.message.chat.id, call.message.message_id, 
+                         reply_markup=markup, parse_mode='Markdown')
+    bot.answer_callback_query(call.id)
+
+def back_to_main_menu(call):
+    """Return to main menu."""
+    username = call.from_user.first_name or call.from_user.username or "Player"
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    
+    btn_profile = types.InlineKeyboardButton("👤 Player Profile", callback_data="menu_profile")
+    btn_commands = types.InlineKeyboardButton("📋 Commands", callback_data="menu_commands")
+    btn_rules = types.InlineKeyboardButton("📖 Rules", callback_data="menu_rules")
+    btn_request = types.InlineKeyboardButton("🎮 Request Game Type", callback_data="menu_request_game")
+    btn_schedule = types.InlineKeyboardButton("📅 Game Schedule", callback_data="menu_schedule")
+    btn_join = types.InlineKeyboardButton("🎯 Join a Game", callback_data="menu_join_game")
+    
+    markup.add(btn_profile, btn_commands)
+    markup.add(btn_rules, btn_request)
+    markup.add(btn_schedule, btn_join)
+    
+    welcome_text = f"🎰 *Welcome to Bingo Bot, {username}!*\n\n"
+    welcome_text += "Choose an option from the menu below:"
+    
+    bot.edit_message_text(welcome_text, call.message.chat.id, call.message.message_id, 
+                         reply_markup=markup, parse_mode='Markdown')
+    bot.answer_callback_query(call.id)
+
+# Join game workflow handlers
+@bot.callback_query_handler(func=lambda call: call.data.startswith('join_game_'))
+def handle_join_game(call):
+    """Handle joining a specific game."""
+    game_id = int(call.data.split('_')[2])
+    user_id = call.from_user.id
+    username = call.from_user.first_name or call.from_user.username or "Player"
+    
+    # Get game details
+    conn = sqlite3.connect('game.db')
+    c = conn.cursor()
+    c.execute("""SELECT id, game_date, game_time, game_type, pattern, entry_cost 
+                 FROM scheduled_games WHERE id = ?""", (game_id,))
+    game = c.fetchone()
+    conn.close()
+    
+    if not game:
+        bot.answer_callback_query(call.id, "Game not found!", show_alert=True)
+        return
+    
+    game_id, game_date, game_time, game_type, pattern, entry_cost = game
+    
+    join_text = f"🎯 *Joining Game #{game_id}*\n\n"
+    join_text += f"📆 Date: {game_date}\n"
+    join_text += f"🕐 Time: {game_time}\n"
+    join_text += f"🎮 Type: {game_type}\n"
+    join_text += f"🏆 Pattern: {pattern}\n"
+    join_text += f"💎 Cost: {entry_cost} points per card\n\n"
+    join_text += "How many cards would you like?"
+    
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    for i in range(1, 7):  # 1-6 cards
+        markup.add(types.InlineKeyboardButton(f"{i} Card{'s' if i > 1 else ''}", 
+                                               callback_data=f"cards_{game_id}_{i}"))
+    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu_join_game"))
+    
+    bot.edit_message_text(join_text, call.message.chat.id, call.message.message_id, 
+                         reply_markup=markup, parse_mode='Markdown')
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('cards_'))
+def handle_card_selection(call):
+    """Handle card count selection."""
+    parts = call.data.split('_')
+    game_id = int(parts[1])
+    cards_requested = int(parts[2])
+    user_id = call.from_user.id
+    username = call.from_user.first_name or call.from_user.username or "Player"
+    
+    # Get player points
+    player = get_or_create_player(user_id, username)
+    user_id, username, points, cards_owned = player
+    
+    # Get game details
+    conn = sqlite3.connect('game.db')
+    c = conn.cursor()
+    c.execute("SELECT entry_cost FROM scheduled_games WHERE id = ?", (game_id,))
+    result = c.fetchone()
+    conn.close()
+    
+    if not result:
+        bot.answer_callback_query(call.id, "Game not found!", show_alert=True)
+        return
+    
+    entry_cost = result[0]
+    total_cost = entry_cost * cards_requested
+    
+    confirm_text = f"🎴 *Confirm Purchase*\n\n"
+    confirm_text += f"Cards Requested: {cards_requested}\n"
+    confirm_text += f"Points Required: {total_cost}\n"
+    confirm_text += f"Your Points: {points}\n\n"
+    
+    if total_cost > points:
+        confirm_text += "❌ *Insufficient Points!*\n"
+        confirm_text += f"You need {total_cost - points} more points."
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data=f"join_game_{game_id}"))
+    else:
+        confirm_text += "✅ You have enough points!\n\n"
+        confirm_text += "Do you want to proceed?"
+        
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("✅ Approve", callback_data=f"approve_{game_id}_{cards_requested}"),
+            types.InlineKeyboardButton("❌ Cancel", callback_data=f"join_game_{game_id}")
+        )
+    
+    bot.edit_message_text(confirm_text, call.message.chat.id, call.message.message_id, 
+                         reply_markup=markup, parse_mode='Markdown')
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('approve_'))
+def handle_approve_purchase(call):
+    """Handle purchase approval."""
+    parts = call.data.split('_')
+    game_id = int(parts[1])
+    cards_requested = int(parts[2])
+    user_id = call.from_user.id
+    username = call.from_user.first_name or call.from_user.username or "Player"
+    
+    # Create registration
+    registration_id = register_for_game(game_id, user_id, username, cards_requested)
+    
+    if not registration_id:
+        bot.answer_callback_query(call.id, "Error creating registration!", show_alert=True)
+        return
+    
+    # Instruction to DM bot
+    dm_text = f"✅ *Request Submitted!*\n\n"
+    dm_text += f"Registration ID: #{registration_id}\n"
+    dm_text += f"Game ID: #{game_id}\n"
+    dm_text += f"Cards: {cards_requested}\n\n"
+    dm_text += "📩 *Next Steps:*\n"
+    dm_text += "1. Click the button below to start a DM with the bot\n"
+    dm_text += "2. Click 'Start' in the DM\n"
+    dm_text += "3. Wait for admin approval\n"
+    dm_text += "4. Once approved, your points will be deducted and you'll be added to the game!"
+    
+    markup = types.InlineKeyboardMarkup()
+    bot_username = bot.get_me().username
+    dm_url = f"https://t.me/{bot_username}?start=reg_{registration_id}"
+    markup.add(types.InlineKeyboardButton("💬 Open DM with Bot", url=dm_url))
+    markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data="back_to_main"))
+    
+    bot.edit_message_text(dm_text, call.message.chat.id, call.message.message_id, 
+                         reply_markup=markup, parse_mode='Markdown')
+    bot.answer_callback_query(call.id, "Request submitted! Please DM the bot.")
+
+# Handle DM start with registration parameter
+@bot.message_handler(func=lambda message: message.text and message.text.startswith('/start reg_'))
+def handle_dm_registration_start(message):
+    """Handle when player DMs bot with registration link."""
+    try:
+        registration_id = int(message.text.split('_')[1])
+    except:
+        bot.reply_to(message, "Invalid registration link!")
+        return
+    
+    user_id = message.from_user.id
+    username = message.from_user.first_name or message.from_user.username or "Player"
+    
+    # Get registration details
+    registration = get_registration(registration_id)
+    
+    if not registration:
+        bot.reply_to(message, "❌ Registration not found!")
+        return
+    
+    (reg_id, game_id, reg_user_id, reg_username, cards_requested, points_paid, 
+     status, admin_approved, game_date, game_time, game_type, pattern) = registration
+    
+    if reg_user_id != user_id:
+        bot.reply_to(message, "❌ This registration doesn't belong to you!")
+        return
+    
+    if admin_approved != 'pending':
+        bot.reply_to(message, f"ℹ️ This registration is already {admin_approved}.")
+        return
+    
+    # Send admin approval request
+    admin_text = f"🔔 *New Registration Request*\n\n"
+    admin_text += f"👤 Player: {reg_username} (ID: {reg_user_id})\n"
+    admin_text += f"🎮 Game #{game_id}\n"
+    admin_text += f"📆 {game_date} {game_time}\n"
+    admin_text += f"🎴 Cards: {cards_requested}\n"
+    admin_text += f"💎 Points: {points_paid}\n"
+    admin_text += f"🏆 Type: {game_type} - {pattern}\n\n"
+    admin_text += "Do you approve this registration?"
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("✅ Approve", callback_data=f"admin_approve_{registration_id}"),
+        types.InlineKeyboardButton("❌ Reject", callback_data=f"admin_reject_{registration_id}")
+    )
+    
+    try:
+        bot.send_message(ADMIN_ID, admin_text, reply_markup=markup, parse_mode='Markdown')
+        
+        # Confirm to player
+        confirm_text = f"✅ *Request Sent to Admin!*\n\n"
+        confirm_text += f"Registration ID: #{registration_id}\n"
+        confirm_text += f"Game: #{game_id} on {game_date}\n"
+        confirm_text += f"Cards: {cards_requested}\n\n"
+        confirm_text += "⏳ Please wait for admin approval.\n"
+        confirm_text += "You'll be notified once the decision is made."
+        
+        bot.reply_to(message, confirm_text, parse_mode='Markdown')
+    except Exception as e:
+        bot.reply_to(message, f"❌ Error sending approval request: {str(e)}")
+
+# Admin approval handlers
+@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_approve_'))
+def handle_admin_approve(call):
+    """Admin approves a registration."""
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, "Only admin can approve!", show_alert=True)
+        return
+    
+    registration_id = int(call.data.split('_')[2])
+    
+    # Get registration details before approval
+    registration = get_registration(registration_id)
+    if not registration:
+        bot.answer_callback_query(call.id, "Registration not found!", show_alert=True)
+        return
+    
+    (reg_id, game_id, user_id, username, cards_requested, points_paid, 
+     status, admin_approved, game_date, game_time, game_type, pattern) = registration
+    
+    # Approve registration
+    success = approve_registration(registration_id)
+    
+    if success:
+        # Update admin message
+        approved_text = call.message.text + "\n\n✅ *APPROVED*"
+        bot.edit_message_text(approved_text, call.message.chat.id, call.message.message_id, 
+                             parse_mode='Markdown')
+        
+        # Notify player
+        notify_text = f"🎉 *Registration Approved!*\n\n"
+        notify_text += f"Game #{game_id} on {game_date}\n"
+        notify_text += f"Cards: {cards_requested}\n"
+        notify_text += f"Points Deducted: {points_paid}\n\n"
+        notify_text += "You've been added to the card holder list!\n"
+        notify_text += "You'll receive your cards when the game starts."
+        
+        try:
+            bot.send_message(user_id, notify_text, parse_mode='Markdown')
+        except:
+            pass
+        
+        bot.answer_callback_query(call.id, "Registration approved!")
+    else:
+        bot.answer_callback_query(call.id, "Error approving registration!", show_alert=True)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_reject_'))
+def handle_admin_reject(call):
+    """Admin rejects a registration."""
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, "Only admin can reject!", show_alert=True)
+        return
+    
+    registration_id = int(call.data.split('_')[2])
+    
+    # Get registration details
+    registration = get_registration(registration_id)
+    if not registration:
+        bot.answer_callback_query(call.id, "Registration not found!", show_alert=True)
+        return
+    
+    (reg_id, game_id, user_id, username, cards_requested, points_paid, 
+     status, admin_approved, game_date, game_time, game_type, pattern) = registration
+    
+    # Update registration status
+    conn = sqlite3.connect('game.db')
+    c = conn.cursor()
+    c.execute("UPDATE game_registrations SET admin_approved = 'rejected', status = 'rejected' WHERE id = ?",
+             (registration_id,))
+    conn.commit()
+    conn.close()
+    
+    # Update admin message
+    rejected_text = call.message.text + "\n\n❌ *REJECTED*"
+    bot.edit_message_text(rejected_text, call.message.chat.id, call.message.message_id, 
+                         parse_mode='Markdown')
+    
+    # Notify player
+    notify_text = f"❌ *Registration Rejected*\n\n"
+    notify_text += f"Game #{game_id} on {game_date}\n"
+    notify_text += f"Your registration was not approved.\n\n"
+    notify_text += "No points were deducted.\n"
+    notify_text += "You can try joining another game."
+    
+    try:
+        bot.send_message(user_id, notify_text, parse_mode='Markdown')
+    except:
+        pass
+    
+    bot.answer_callback_query(call.id, "Registration rejected!")
+
+# Request game type handler
+@bot.callback_query_handler(func=lambda call: call.data.startswith('request_'))
+def handle_request_game_type(call):
+    """Handle game type request."""
+    game_type = call.data.split('_')[1]
+    user_id = call.from_user.id
+    username = call.from_user.first_name or call.from_user.username or "Player"
+    
+    request_text = f"✅ *Request Sent!*\n\n"
+    request_text += f"You've requested a *{game_type}* game.\n"
+    request_text += "The admin has been notified."
+    
+    # Notify admin
+    admin_msg = f"🎮 *Game Type Request*\n\n"
+    admin_msg += f"From: {username} (ID: {user_id})\n"
+    admin_msg += f"Requested: {game_type} game"
+    
+    try:
+        bot.send_message(ADMIN_ID, admin_msg, parse_mode='Markdown')
+    except:
+        pass
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data="back_to_main"))
+    
+    bot.edit_message_text(request_text, call.message.chat.id, call.message.message_id, 
+                         reply_markup=markup, parse_mode='Markdown')
+    bot.answer_callback_query(call.id)
 
 @bot.message_handler(commands=['approvegroup'])
 def approve_group_cmd(message):
@@ -366,6 +1020,97 @@ def list_groups_cmd(message):
         text += f"• {title} (ID: {chat_id})\n"
     
     bot.reply_to(message, text, parse_mode='Markdown')
+
+@bot.message_handler(commands=['schedulegame'])
+def schedule_game_cmd(message):
+    """Admin command to schedule a new game."""
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ Admin only")
+        return
+    
+    # Parse command: /schedulegame <date> <time> <type> <pattern> [entry_cost]
+    # Example: /schedulegame 2026-02-10 18:00 classic single_line 10
+    parts = message.text.split()
+    
+    if len(parts) < 5:
+        help_text = "📅 *Schedule a Game*\n\n"
+        help_text += "*Usage:*\n"
+        help_text += "`/schedulegame <date> <time> <type> <pattern> [cost]`\n\n"
+        help_text += "*Example:*\n"
+        help_text += "`/schedulegame 2026-02-10 18:00 classic single_line 10`\n\n"
+        help_text += "*Types:* classic, dual_action\n"
+        help_text += "*Patterns:* single_line, four_corners, blackout, letter_X, postage_stamp"
+        bot.reply_to(message, help_text, parse_mode='Markdown')
+        return
+    
+    game_date = parts[1]
+    game_time = parts[2]
+    game_type = parts[3]
+    pattern = parts[4]
+    entry_cost = int(parts[5]) if len(parts) > 5 else 10
+    
+    # Validate game type and pattern
+    valid_types = ['classic', 'dual_action']
+    valid_patterns = ['single_line', 'four_corners', 'blackout', 'letter_X', 'postage_stamp']
+    
+    if game_type not in valid_types:
+        bot.reply_to(message, f"❌ Invalid game type. Use: {', '.join(valid_types)}")
+        return
+    
+    if pattern not in valid_patterns:
+        bot.reply_to(message, f"❌ Invalid pattern. Use: {', '.join(valid_patterns)}")
+        return
+    
+    # Create scheduled game
+    game_id = create_scheduled_game(game_date, game_time, game_type, pattern, entry_cost=entry_cost)
+    
+    success_text = f"✅ *Game Scheduled!*\n\n"
+    success_text += f"Game ID: #{game_id}\n"
+    success_text += f"📆 Date: {game_date}\n"
+    success_text += f"🕐 Time: {game_time}\n"
+    success_text += f"🎮 Type: {game_type}\n"
+    success_text += f"🏆 Pattern: {pattern}\n"
+    success_text += f"💎 Entry Cost: {entry_cost} points per card\n\n"
+    success_text += "Players can now join this game from the menu!"
+    
+    bot.reply_to(message, success_text, parse_mode='Markdown')
+
+@bot.message_handler(commands=['profile'])
+def profile_cmd(message):
+    """Show player profile."""
+    user_id = message.from_user.id
+    username = message.from_user.first_name or message.from_user.username or "Player"
+    
+    player = get_or_create_player(user_id, username)
+    user_id, username, points, cards_owned = player
+    
+    profile_text = f"👤 *Your Profile*\n\n"
+    profile_text += f"🎭 Name: {username}\n"
+    profile_text += f"💎 Points: {points}\n"
+    profile_text += f"🎴 Cards Owned: {cards_owned}\n"
+    profile_text += f"🆔 ID: {user_id}\n"
+    
+    bot.reply_to(message, profile_text, parse_mode='Markdown')
+
+@bot.message_handler(commands=['schedule'])
+def schedule_cmd(message):
+    """Show game schedule."""
+    games = get_scheduled_games()
+    
+    if not games:
+        bot.reply_to(message, "📅 No games scheduled at the moment.")
+        return
+    
+    schedule_text = "📅 *Upcoming Games*\n\n"
+    for game in games:
+        game_id, game_date, game_time, game_type, pattern, max_players, entry_cost, status = game
+        schedule_text += f"*Game #{game_id}*\n"
+        schedule_text += f"📆 {game_date} at {game_time}\n"
+        schedule_text += f"🎮 {game_type} - {pattern}\n"
+        schedule_text += f"💎 {entry_cost} points/card\n"
+        schedule_text += "─────────────\n"
+    
+    bot.reply_to(message, schedule_text, parse_mode='Markdown')
 
 @bot.message_handler(commands=['starttournament'])
 def start_tournament_cmd(message):
